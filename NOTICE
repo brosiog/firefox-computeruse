@@ -1,0 +1,8 @@
+Firefox Computer Use
+Copyright 2026 Ambrosio Gomez
+
+This project is a Firefox port and redesign of Nanobrowser (https://github.com/nanobrowser/nanobrowser),
+Copyright Nanobrowser contributors, licensed under the Apache License 2.0. Nanobrowser's control layer is built on
+chrome.debugger (CDP); this project reimplements perception and interaction on Firefox WebExtension APIs and keeps
+several of Nanobrowser's design rules: refs that fail closed, consequential actions gated before dispatch, page content
+marked as data, and masked secret fields.

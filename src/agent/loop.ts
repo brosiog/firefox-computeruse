@@ -1,0 +1,310 @@
+// The agent loop: observe → one model call → one action → record, until done. One model call per step, no planner,
+// no second model. Everything the model sees per step is: fixed system prompt, the task, the compact action/result
+// history, and the current page state at the tail.
+
+import { chat as realChat, type ChatResult, type Usage } from '../llm/client';
+import type { Gate, ProbeResult, Risk } from '../protocol';
+import type { Settings } from '../settings';
+import type { Host } from '../browser/host';
+import { buildMessages, compact, estimateTokens, systemPrompt, taskMessage, type Step } from './prompt';
+import { actionSchema, canonical, extractJson, parseAction, type Action } from './tools';
+
+export type AgentEvent =
+  | { type: 'step'; n: number }
+  | { type: 'thinking'; text: string }
+  | { type: 'slow'; seconds: number }
+  | { type: 'action'; action: Action; usage: Usage; mode: string; promptTokensEst: number }
+  | { type: 'result'; ok: boolean; text: string }
+  | { type: 'parse-error'; raw: string; error: string }
+  | { type: 'compacted' }
+  | { type: 'error'; text: string }
+  | { type: 'done'; success: boolean; answer: string; steps: number; ms: number }
+  | { type: 'trace'; step: StepTrace };
+
+/** Everything about one step, for benchmarks: the exact prompt, the reply, what happened, and where time went. */
+export interface StepTrace {
+  n: number;
+  messages: { role: string; content: string; images?: number }[];
+  raw: string;
+  action: Action | null;
+  parseError?: string;
+  result?: { ok: boolean; text: string };
+  usage: Usage;
+  mode: string;
+  url: string;
+  pageChars: number;
+  promptChars: number;
+  ms: { observe: number; model: number; act: number };
+  compacted: boolean;
+}
+
+export interface AgentUI {
+  event(e: AgentEvent): void;
+  approve(gate: Gate, action: Action): Promise<boolean>;
+  ask(question: string): Promise<string | null>;
+}
+
+export interface RunOptions {
+  task: string;
+  settings: Settings;
+  host: Host;
+  ui: AgentUI;
+  signal: AbortSignal;
+  chat?: typeof realChat;
+  now?: () => Date;
+}
+
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>(r => {
+    const t = setTimeout(r, ms);
+    signal?.addEventListener('abort', () => (clearTimeout(t), r()), { once: true });
+  });
+
+export function gatesFor(mode: Settings['approval']): Risk[] {
+  // Payments and secrets are always the user's call; writes and deletes ask only in Ask mode.
+  return mode === 'auto' ? ['pay', 'secret'] : ['write', 'delete', 'pay', 'secret'];
+}
+
+/** Live preview of the `think` field while the JSON streams in. */
+export function partialThink(s: string): string {
+  const m = /"think"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(s);
+  if (!m) return '';
+  try {
+    return JSON.parse(`"${m[1].replace(/\\$/, '')}"`);
+  } catch {
+    return m[1];
+  }
+}
+
+export async function runAgent(o: RunOptions): Promise<{ success: boolean; answer: string }> {
+  const { settings: s, host, ui, signal } = o;
+  const chat = o.chat ?? realChat;
+  const t0 = Date.now();
+  // Benchmarks swap the system prompt (ablations, variants) without rebuilding; normal settings never set this.
+  const system = s.systemOverride || systemPrompt({ vision: s.vision, reasoning: s.reasoning });
+  const date = (o.now?.() ?? new Date()).toISOString().slice(0, 10);
+  const task = taskMessage(o.task, date);
+  const schema = actionSchema(s.vision, s.reasoning);
+  let steps: Step[] = [];
+  let prevRefs = new Set<string>();
+  let lastKey = '';
+  let repeats = 0;
+  let failures = 0;
+  let llmRetries = 0;
+  let parseFails = 0;
+  let wantShot = false;
+  const declined = new Set<string>();
+
+  const finish = (success: boolean, answer: string, n: number) => {
+    ui.event({ type: 'done', success, answer, steps: n, ms: Date.now() - t0 });
+    return { success, answer };
+  };
+
+  for (let n = 1; n <= s.maxSteps; n++) {
+    if (signal.aborted) return finish(false, 'Stopped.', n - 1);
+    ui.event({ type: 'step', n });
+
+    const tObs = performance.now();
+    const obs = await host.observe(s.pageBudget);
+    let images: string[] | undefined;
+    if (s.vision && (wantShot || s.screenshotEachStep) && !obs.restricted) {
+      const shot = await host.screenshot(true);
+      if (shot) images = [shot];
+    }
+    wantShot = false;
+
+    const notes: string[] = [];
+    const fresh = obs.refs.filter(r => !prevRefs.has(r));
+    if (n > 1 && fresh.length && fresh.length < obs.refs.length) notes.push(`(${fresh.length} elements are new since your last action.)`);
+    prevRefs = new Set(obs.refs);
+    if (repeats >= 2) notes.push('Warning: you have repeated the same action without progress. Do something different, or use done.');
+    if (n === s.maxSteps) notes.push('This is your last step: use done now with what you have.');
+    const tail = `${obs.text}\n${notes.join('\n')}${notes.length ? '\n' : ''}Step ${n}/${s.maxSteps}.`;
+
+    // Context budget: leave room for the model's output (and its thinking, if on).
+    const mode = s.history ?? 'extend';
+    const fixed = estimateTokens(buildMessages(system, task, [], tail, images));
+    const room = s.contextWindow - Math.max(s.maxOutput, s.effort === 'none' ? 0 : 4096) - 256;
+    const budget = mode === 'extend' ? Math.min(room, Math.max(4000, s.historyBudget ?? 16000)) : room;
+    const c = compact(steps, budget, fixed, mode);
+    if (c.changed) {
+      steps = c.steps;
+      ui.event({ type: 'compacted' });
+    }
+    const msgs = buildMessages(system, task, steps, tail, images, mode);
+    const tModel = performance.now();
+    const obsMs = tModel - tObs;
+    const trace = (t: Partial<StepTrace> & Pick<StepTrace, 'raw' | 'action'>, actMs = 0) =>
+      ui.event({
+        type: 'trace',
+        step: {
+          n,
+          messages: msgs.map(m => ({ role: m.role, content: m.content, images: m.images?.length })),
+          usage: res.usage,
+          mode: res.mode,
+          url: obs.url,
+          pageChars: obs.text.length,
+          promptChars: msgs.reduce((k, m) => k + m.content.length, 0),
+          ms: { observe: Math.round(obsMs), model: Math.round(modelMs), act: Math.round(actMs) },
+          compacted: c.changed,
+          ...t,
+        },
+      });
+    let modelMs = 0;
+
+    let res: ChatResult;
+    let gotText = false;
+    const slow = setTimeout(() => !gotText && ui.event({ type: 'slow', seconds: 8 }), 8000);
+    try {
+      res = await chat(s, msgs, schema, signal, partial => {
+        gotText = true;
+        const t = partialThink(partial);
+        if (t) ui.event({ type: 'thinking', text: t });
+      });
+    } catch (e) {
+      clearTimeout(slow);
+      if (signal.aborted) return finish(false, 'Stopped.', n - 1);
+      const msg = (e as Error).message ?? String(e);
+      // One retry for transient failures (server restarting, model reloading after idle release).
+      if (!/error 4\d\d/.test(msg) && llmRetries++ < 2) {
+        ui.event({ type: 'error', text: `${msg} — retrying` });
+        await sleep(3000, signal);
+        n--;
+        continue;
+      }
+      ui.event({ type: 'error', text: msg });
+      return finish(false, `Model error: ${msg}`, n - 1);
+    }
+    clearTimeout(slow);
+    llmRetries = 0;
+    modelMs = performance.now() - tModel;
+
+    const parsed = parseAction(res.text, s.vision);
+    if (!parsed.ok) {
+      ui.event({ type: 'parse-error', raw: res.text, error: parsed.error });
+      trace({ raw: res.text, action: null, parseError: parsed.error });
+      if (++parseFails >= 3) return finish(false, `The model did not produce a valid action: ${parsed.error}`, n);
+      steps.push({ page: tail, action: res.text.trim().slice(0, 300) || '(empty reply)', result: `Error: ${parsed.error}` });
+      continue;
+    }
+    parseFails = 0;
+    const a = parsed.action;
+    ui.event({ type: 'action', action: a, usage: res.usage, mode: res.mode, promptTokensEst: estimateTokens(msgs) });
+
+    if (a.tool === 'done') {
+      trace({ raw: res.text, action: a });
+      return finish(a.success !== false, a.answer ?? '', n);
+    }
+
+    let result: { ok: boolean; text: string };
+    const tAct = performance.now();
+    try {
+      result = await execute(a, obs.url);
+      // A chain runs on the page the model saw: it stops at the first failure, at a page change (navigation, new
+      // tab), or at a tab switch; what did not run is said, so nothing is silently skipped.
+      if (a.dropped) result.text += `\n(the ${a.dropped} chained action(s) were not run: "then" only works after click, type, select, key, scroll or hover, on the same page)`;
+      const chain = a.then ?? [];
+      const tab0 = host.tabId;
+      for (let k = 0; k < chain.length; k++) {
+        if (!result.ok || /URL is now|new tab|navigated/.test(result.text) || host.tabId !== tab0) {
+          result.text += `\n(the remaining ${chain.length - k} chained action(s) were not run: ${result.ok ? 'the page changed' : 'the previous one failed'})`;
+          break;
+        }
+        const r = await execute(chain[k], obs.url);
+        result = { ok: r.ok, text: `${result.text}\nthen ${chain[k].tool}${chain[k].ref ? ` [${chain[k].ref}]` : ''}: ${r.ok ? 'OK' : 'Error'}: ${r.text}` };
+      }
+    } catch (e) {
+      result = { ok: false, text: `the action failed: ${(e as Error).message ?? e}` };
+    }
+    ui.event({ type: 'result', ok: result.ok, text: result.text });
+    trace({ raw: res.text, action: a, result }, performance.now() - tAct);
+    failures = result.ok ? 0 : failures + 1;
+    if (failures >= 6) return finish(false, `Stopped after repeated failures. Last error: ${result.text}`, n);
+
+    const key = canonical({ ...a, think: undefined }) + '@' + obs.url;
+    repeats = key === lastKey ? repeats + 1 : 0;
+    lastKey = key;
+
+    // History keeps the model's own JSON when it was clean (maximizes cache reuse on servers that keep generated
+    // tokens), canonical JSON otherwise.
+    const rawJson = extractJson(res.text)?.trim();
+    let hist = canonical(a);
+    try {
+      if (rawJson && JSON.parse(rawJson) && rawJson.length < hist.length + 40) hist = rawJson;
+    } catch {
+      // use canonical
+    }
+    steps.push({ page: tail, action: hist, result: `${result.ok ? 'OK' : 'Error'}: ${result.text}` });
+  }
+  return finish(false, `Reached the step limit (${s.maxSteps}) before finishing.`, s.maxSteps);
+
+  async function execute(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }> {
+    const gate = gatesFor(s.approval);
+    const probe = async (cmd: any, ref?: string): Promise<{ ok: boolean; text: string }> => {
+      let r: ProbeResult = await host.act(ref, cmd, gate);
+      if (!r.ok && r.gate) {
+        // A decline holds for the page: the same kind of action there is declined again without asking, whatever
+        // route the model takes to it (another button, Enter in the field, the form's other submit).
+        const page = urlBefore.split('#')[0];
+        if (declined.has(`${r.gate.risk}@${page}`)) {
+          return { ok: false, text: `the user already declined this (${r.gate.what}). Stop trying; use done with success false and say what was not done.` };
+        }
+        const yes = await o.ui.approve(r.gate, a);
+        if (!yes) declined.add(`${r.gate.risk}@${page}`);
+        if (signal.aborted) return { ok: false, text: 'stopped' };
+        if (!yes) return { ok: false, text: `the user declined: ${r.gate.what}. Do not try it again another way; choose something else or use done.` };
+        r = await host.act(ref, { ...cmd, approved: true }, gate);
+      }
+      if (!r.ok) return { ok: false, text: r.error };
+      let text = r.msg;
+      if (r.openUrl) text += '; ' + (await host.newTab(r.openUrl));
+      else if (cmd.op !== 'read' && cmd.op !== 'find') {
+        const moved = await host.settle(urlBefore);
+        if (moved) text += ` ${moved}.`;
+      }
+      return { ok: true, text };
+    };
+    switch (a.tool) {
+      case 'click':
+        return probe({ op: 'click' }, a.ref);
+      case 'type':
+        return probe({ op: 'type', text: a.text ?? '', clear: true, enter: !!a.enter }, a.ref);
+      case 'select':
+        return probe({ op: 'select', option: a.option ?? '' }, a.ref);
+      case 'key':
+        return probe({ op: 'key', key: a.key ?? '' }, a.ref);
+      case 'scroll':
+        return probe({ op: 'scroll', dir: a.dir ?? 'down' }, a.ref);
+      case 'hover':
+        return probe({ op: 'hover' }, a.ref);
+      case 'read':
+        return probe({ op: 'read', offset: a.offset ?? 0, budget: Math.min(6000, Math.max(2000, s.pageBudget)), query: a.query });
+      case 'find':
+        return probe({ op: 'find', text: a.text ?? a.query ?? '', limit: 15 });
+      case 'navigate':
+        return { ok: true, text: await host.navigate(a.url!) };
+      case 'back':
+        return { ok: true, text: await host.back() };
+      case 'tab_new':
+        return { ok: true, text: await host.newTab(a.url!) };
+      case 'tab_switch':
+        return { ok: true, text: await host.switchTab(a.tab!) };
+      case 'tab_close':
+        return { ok: true, text: await host.closeTab() };
+      case 'wait': {
+        const sec = Math.min(10, Math.max(0.5, a.seconds ?? 2));
+        await sleep(sec * 1000, signal);
+        return { ok: true, text: `waited ${sec}s. ${await host.settle(urlBefore)}`.trim() };
+      }
+      case 'screenshot':
+        wantShot = true;
+        return { ok: true, text: 'a screenshot of the page (with refs drawn on it) is attached below.' };
+      case 'ask': {
+        const ans = await o.ui.ask(a.text ?? '');
+        return ans === null ? { ok: false, text: 'the user did not answer.' } : { ok: true, text: `the user answered: ${ans}` };
+      }
+      default:
+        return { ok: false, text: `unknown tool ${a.tool}` };
+    }
+  }
+}

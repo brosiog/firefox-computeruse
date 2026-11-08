@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Computer Use</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">Computer Use</div>
+      <button id="status" class="pill" title="Model server">…</button>
+      <button id="new" class="icon" title="New task">＋</button>
+      <button id="gear" class="icon" title="Settings">⚙</button>
+    </header>
+    <div id="perm" class="banner" hidden>
+      Firefox has not granted this extension access to websites yet.
+      <button id="grant">Allow on all sites</button>
+    </div>
+    <main id="log">
+      <div class="empty" id="empty">
+        <p>Tell the agent what to do in this tab.</p>
+        <p class="hint">e.g. “Find the cheapest USB-C hub on this page and add it to the cart”</p>
+      </div>
+    </main>
+    <form id="composer">
+      <textarea id="input" rows="2" placeholder="What should I do?" autocomplete="off"></textarea>
+      <button id="go" type="submit">Run</button>
+    </form>
+
+    <dialog id="settings">
+      <form method="dialog" id="sform">
+        <h2>Settings</h2>
+        <label>Server preset
+          <select id="preset"></select>
+        </label>
+        <p class="hint" id="presetHint"></p>
+        <label>API style
+          <select name="kind">
+            <option value="openai">OpenAI-compatible (/v1/chat/completions)</option>
+            <option value="ollama">Ollama native (/api/chat)</option>
+          </select>
+        </label>
+        <label>Base URL <input name="baseUrl" type="url" required /></label>
+        <label>Model
+          <span class="row"><input name="model" list="models" /><button type="button" id="fetchModels">List</button></span>
+          <datalist id="models"></datalist>
+        </label>
+        <label>API key (optional) <input name="apiKey" type="password" autocomplete="off" /></label>
+        <div class="grid">
+          <label>Context window <input name="contextWindow" type="number" min="2048" step="1024" /></label>
+          <label>Max steps <input name="maxSteps" type="number" min="1" max="200" /></label>
+          <label>Page budget (chars) <input name="pageBudget" type="number" min="1000" step="500" /></label>
+          <label>Temperature <input name="temperature" type="number" min="0" max="2" step="0.1" /></label>
+        </div>
+        <label>Model thinking (reasoning effort)
+          <select name="effort">
+            <option value="none">none — fastest (recommended for browsing)</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="default">server default (send nothing)</option>
+          </select>
+        </label>
+        <label>Structured output
+          <select name="structured">
+            <option value="auto">auto (schema → json → plain, learned per server)</option>
+            <option value="schema">JSON schema</option>
+            <option value="json">JSON mode</option>
+            <option value="off">off (tolerant parsing only)</option>
+          </select>
+        </label>
+        <div class="grid">
+          <label>History
+            <select name="history">
+              <option value="extend">extend (cache-friendly everywhere)</option>
+              <option value="compact">compact (smallest context)</option>
+            </select>
+          </label>
+          <label>History budget (tokens) <input name="historyBudget" type="number" min="4000" step="1000" /></label>
+        </div>
+        <label>Approvals
+          <select name="approval">
+            <option value="ask">Ask before submitting, sending or deleting</option>
+            <option value="auto">Auto (still asks for payments and passwords)</option>
+          </select>
+        </label>
+        <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
+        <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>
+        <label class="check"><input name="screenshotEachStep" type="checkbox" /> Attach a screenshot every step</label>
+        <div class="actions">
+          <button type="button" id="test">Test connection</button>
+          <span id="testOut" class="hint"></span>
+          <span class="spacer"></span>
+          <button value="cancel" formnovalidate>Cancel</button>
+          <button value="save" id="save" class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

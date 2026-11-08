@@ -1,0 +1,47 @@
+import { defineConfig } from 'wxt';
+
+// Firefox-first build. WXT defaults Firefox to MV2; this project targets Firefox MV3 (event-page background,
+// sidebar_action for the panel, scripting API for the probe).
+// The e2e build (pnpm e2e) bakes in a fixture server URL; it goes to .output/e2e so dist/ stays a clean build.
+const e2e = !!process.env.WXT_E2E_URL;
+
+export default defineConfig({
+  browser: 'firefox',
+  manifestVersion: 3,
+  outDir: e2e ? '.output/e2e' : 'dist',
+  outDirTemplate: '',
+  imports: false,
+  manifest: {
+    name: 'Firefox Computer Use',
+    description: 'A fast web agent for local models. Runs in the sidebar, drives the current tab.',
+    permissions: ['tabs', 'scripting', 'storage', 'webRequest', 'webRequestBlocking', 'webNavigation'],
+    host_permissions: ['<all_urls>'],
+    // Firefox's default MV3 CSP adds `upgrade-insecure-requests`, which silently rewrites http://<LAN model server> to
+    // https:// and breaks every plain-HTTP local server off localhost (Splash/LM Studio/Ollama on another Mac).
+    content_security_policy: { extension_pages: "script-src 'self'; object-src 'self';" },
+    icons: { 64: 'icon.svg' },
+    action: { default_title: 'Toggle agent sidebar', default_icon: 'icon.svg' },
+    commands: {
+      _execute_sidebar_action: {
+        suggested_key: { default: 'Alt+Shift+A', mac: 'MacCtrl+Shift+A' },
+        description: 'Toggle the agent sidebar',
+      },
+    },
+    browser_specific_settings: {
+      gecko: {
+        id: 'firefox-computeruse@local',
+        strict_min_version: '128.0',
+        data_collection_permissions: { required: ['none'] },
+      },
+    },
+  },
+  hooks: {
+    'build:manifestGenerated': (_wxt, manifest) => {
+      const m = manifest as { sidebar_action?: Record<string, unknown> };
+      if (m.sidebar_action) m.sidebar_action.default_icon = 'icon.svg';
+    },
+  },
+  vite: () => ({
+    build: { target: 'firefox128', sourcemap: false },
+  }),
+});

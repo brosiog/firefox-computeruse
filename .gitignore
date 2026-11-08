@@ -1,0 +1,9 @@
+node_modules/
+.wxt/
+dist/
+.output/
+e2e/.cache/
+e2e/.results/
+*.log
+bench/.build/
+bench/.results/

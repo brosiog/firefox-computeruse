@@ -1,0 +1,35 @@
+{
+  "name": "firefox-computeruse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A lean Firefox web agent for local models (sub-50B), derived from Nanobrowser.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "postinstall": "wxt prepare",
+    "dev": "wxt -b firefox",
+    "build": "wxt build -b firefox",
+    "zip": "wxt zip -b firefox",
+    "test": "vitest run",
+    "type-check": "wxt prepare && tsc --noEmit",
+    "e2e": "node e2e/run.mjs",
+    "bench": "node bench/run.mjs",
+    "bench:oracle": "node bench/run.mjs --model oracle --perturb all",
+    "bench:replay": "node bench/replay.mjs",
+    "bench:compare": "node bench/compare.mjs",
+    "bench:lint": "node bench/lint.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "happy-dom": "^20.0.0",
+    "puppeteer-core": "25.16.0",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5",
+    "wxt": "0.21.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

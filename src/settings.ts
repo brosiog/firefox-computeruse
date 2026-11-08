@@ -1,0 +1,98 @@
+export type ProviderKind = 'ollama' | 'openai';
+export type ApprovalMode = 'ask' | 'auto';
+export type Structured = 'auto' | 'schema' | 'json' | 'off';
+export type Effort = 'default' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+
+export interface Settings {
+  kind: ProviderKind;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  /** Context window the server should allocate (Ollama num_ctx) and the budget compaction works to. */
+  contextWindow: number;
+  maxOutput: number;
+  temperature: number;
+  maxSteps: number;
+  /** Characters of page state per step. ~3.5 chars per token. */
+  pageBudget: number;
+  approval: ApprovalMode;
+  vision: boolean;
+  /** Attach a screenshot with every step (vision models only). */
+  screenshotEachStep: boolean;
+  /** Ask the model for a one-sentence `think` before each action. */
+  reasoning: boolean;
+  /** The model's own thinking. `none` is much faster for browsing steps; `default` sends nothing. Splash, vLLM and
+   *  OpenAI take `reasoning_effort`; Ollama and llama.cpp get an on/off switch. */
+  effort: Effort;
+  structured: Structured;
+  keepAlive: string;
+  /** extend: append-only history (works with every prompt cache, incl. Splash); compact: smallest context. */
+  history: 'extend' | 'compact';
+  /** Tokens of history (extend mode) before old page states are dropped. */
+  historyBudget: number;
+  /** Benchmarks only: replaces the built-in system prompt. Not shown in the UI. */
+  systemOverride?: string;
+}
+
+export interface Preset {
+  label: string;
+  kind: ProviderKind;
+  baseUrl: string;
+  hint: string;
+  model?: string;
+  contextWindow?: number;
+  history?: 'extend' | 'compact';
+}
+
+export const PRESETS: Record<string, Preset> = {
+  splash: {
+    label: 'Splash (LAN Mac)',
+    kind: 'openai',
+    baseUrl: 'http://192.168.86.202:8000/v1',
+    model: 'qwen3.8-27b-splash',
+    contextWindow: 65536,
+    history: 'extend',
+    hint: 'splash serve … (first request after idle-release reloads the model, ~30 s)',
+  },
+  ollama: { label: 'Ollama', kind: 'ollama', baseUrl: 'http://localhost:11434', hint: 'ollama serve' },
+  lmstudio: { label: 'LM Studio', kind: 'openai', baseUrl: 'http://localhost:1234/v1', hint: 'Developer → Start server' },
+  llamacpp: { label: 'llama.cpp server', kind: 'openai', baseUrl: 'http://localhost:8080/v1', hint: 'llama-server -m model.gguf -c 16384 --jinja' },
+  mlx: { label: 'MLX (mlx_lm.server)', kind: 'openai', baseUrl: 'http://localhost:8080/v1', hint: 'mlx_lm.server --model <repo>' },
+  openai: { label: 'OpenAI-compatible (other)', kind: 'openai', baseUrl: 'http://localhost:8000/v1', hint: 'vLLM, OpenRouter, …' },
+};
+
+export const DEFAULTS: Settings = {
+  kind: 'openai',
+  baseUrl: 'http://192.168.86.202:8000/v1',
+  model: 'qwen3.8-27b-splash',
+  apiKey: '',
+  contextWindow: 65536,
+  maxOutput: 400,
+  temperature: 0.2,
+  maxSteps: 40,
+  pageBudget: 5000,
+  approval: 'ask',
+  vision: false,
+  screenshotEachStep: false,
+  reasoning: true,
+  effort: 'none',
+  structured: 'auto',
+  keepAlive: '30m',
+  history: 'extend',
+  historyBudget: 16000,
+};
+
+declare const browser: any;
+
+export async function loadSettings(): Promise<Settings> {
+  try {
+    const { settings } = await browser.storage.local.get('settings');
+    return { ...DEFAULTS, ...(settings ?? {}) };
+  } catch {
+    return { ...DEFAULTS };
+  }
+}
+
+export async function saveSettings(s: Settings): Promise<void> {
+  await browser.storage.local.set({ settings: s });
+}
