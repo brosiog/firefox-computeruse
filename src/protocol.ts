@@ -7,7 +7,7 @@ export type ProbeCmd =
   | { op: 'snapshot'; budget: number }
   | { op: 'click'; id: number; approved?: boolean }
   | { op: 'type'; id: number; text: string; clear: boolean; enter: boolean; approved?: boolean }
-  | { op: 'select'; id: number; option: string }
+  | { op: 'select'; id: number; option: string; approved?: boolean }
   | { op: 'key'; key: string; id?: number; approved?: boolean }
   | { op: 'scroll'; dir: ScrollDir; id?: number; pages?: number }
   | { op: 'hover'; id: number }
@@ -16,9 +16,10 @@ export type ProbeCmd =
   | { op: 'settle'; quietMs: number; maxMs: number }
   | { op: 'marks'; show: boolean };
 
-/** What a consequential action is, decided in the page before anything is dispatched. */
+/** What a consequential action is, decided in the page before anything is dispatched. `act` is any other action
+ *  that changes the page or the tabs (a plain click, typing, navigating); it is gated only when every action asks. */
 /** exfil: sending a form to another site than the page's; suspicious: acting on page text aimed at the agent. */
-export type Risk = 'read' | 'write' | 'delete' | 'pay' | 'secret' | 'exfil' | 'suspicious';
+export type Risk = 'read' | 'act' | 'write' | 'delete' | 'pay' | 'secret' | 'exfil' | 'suspicious';
 
 export interface Gate {
   risk: Risk;

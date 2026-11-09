@@ -9,6 +9,7 @@
   <body>
     <header>
       <div class="brand">Computer Use</div>
+      <button id="fullauto" class="pill bad" title="Full auto: the agent acts without asking, including payments and passwords. Click to change." hidden>full auto</button>
       <span id="agents" class="pill ok" title="A coding agent is connected through the bridge" hidden>agents</span>
       <button id="status" class="pill" title="Model server">…</button>
       <button id="new" class="icon" title="New task">＋</button>
@@ -97,8 +98,10 @@
         </div>
         <label>Approvals
           <select name="approval">
+            <option value="every">Ask before every action (clicks, typing, navigation)</option>
             <option value="ask">Ask before submitting, sending or deleting</option>
             <option value="auto">Auto (still asks for payments and passwords)</option>
+            <option value="off">Full auto: never ask, the agent runs on its own</option>
           </select>
         </label>
         <label>Agent bridge (lets Claude Code, Codex, … use this browser; empty = off)

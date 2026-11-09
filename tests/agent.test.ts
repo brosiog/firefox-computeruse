@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attachBudget, createExecutor, runAgent, type AgentEvent } from '../src/agent/loop';
+import { attachBudget, createExecutor, gatesFor, runAgent, type AgentEvent } from '../src/agent/loop';
 import { buildMessages, compact, systemPrompt } from '../src/agent/prompt';
 import { parseAction } from '../src/agent/tools';
 import type { Host, Observation } from '../src/browser/host';
@@ -183,6 +183,74 @@ describe('runAgent', () => {
     expect(r.success).toBe(false);
     expect(host.log).toEqual(['click:2:']);
     expect(secondPrompt).toContain('the user declined');
+  });
+});
+
+describe('approval levels', () => {
+  it('maps each level to its gates', () => {
+    const sec = ['exfil', 'suspicious'];
+    expect(gatesFor('every')).toEqual(['act', 'write', 'delete', 'pay', 'secret', ...sec]);
+    expect(gatesFor('ask')).toEqual(['write', 'delete', 'pay', 'secret', ...sec]);
+    expect(gatesFor('auto')).toEqual(['pay', 'secret', ...sec]);
+    expect(gatesFor('off')).toEqual(sec);
+  });
+
+  it('full auto refuses page-originated requests without asking, and allows the rest', async () => {
+    const acts: string[] = [];
+    const host: any = {
+      tabId: 1,
+      act: async (ref: string, cmd: any, gate: string[]) => {
+        acts.push(`${ref}:${cmd.approved ? 'approved' : ''}`);
+        if (ref === '1' && gate.includes('suspicious')) return { ok: false, error: 'held', gate: { risk: 'suspicious', what: 'click [1]' } };
+        return { ok: true, msg: 'clicked' };
+      },
+      settle: async () => '',
+    };
+    const ex = createExecutor({
+      host, settings: { ...DEFAULTS, approval: 'off' }, signal: new AbortController().signal,
+      ui: { approve: async () => { throw new Error('asked'); }, ask: async () => null },
+    });
+    const r = await ex.execute({ tool: 'click', ref: '1' }, 'https://x.test/');
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain('came from the page');
+    expect((await ex.execute({ tool: 'click', ref: '2' }, 'https://x.test/')).ok).toBe(true);
+    expect(acts).toEqual(['1:', '2:']);
+  });
+
+  const navHost = (log: string[]): any => ({
+    tabId: 1,
+    navigate: async (u: string) => (log.push(`nav:${u}`), `opened ${u}`),
+    back: async () => (log.push('back'), 'back'),
+    newTab: async () => 'new',
+    switchTab: async () => 'sw',
+    closeTab: async () => 'closed',
+    settle: async () => '',
+  });
+
+  it('every-action mode asks before navigating; a decline holds for that action only', async () => {
+    const log: string[] = [];
+    const asked: string[] = [];
+    const ex = createExecutor({
+      host: navHost(log), settings: { ...DEFAULTS, approval: 'every' }, signal: new AbortController().signal,
+      ui: { approve: async g => (asked.push(`${g.risk}:${g.what}`), g.what.includes('a.test')), ask: async () => null },
+    });
+    expect((await ex.execute({ tool: 'navigate', url: 'https://a.test/' }, 'https://x.test/')).ok).toBe(true);
+    expect((await ex.execute({ tool: 'navigate', url: 'https://b.test/' }, 'https://x.test/')).text).toContain('the user declined');
+    expect((await ex.execute({ tool: 'navigate', url: 'https://b.test/' }, 'https://x.test/')).text).toContain('already declined');
+    expect(log).toEqual(['nav:https://a.test/']);
+    expect(asked).toEqual(['act:open https://a.test/', 'act:open https://b.test/']);
+  });
+
+  it('other levels navigate without asking', async () => {
+    for (const approval of ['ask', 'auto', 'off'] as const) {
+      const log: string[] = [];
+      const ex = createExecutor({
+        host: navHost(log), settings: { ...DEFAULTS, approval }, signal: new AbortController().signal,
+        ui: { approve: async () => { throw new Error('asked'); }, ask: async () => null },
+      });
+      expect((await ex.execute({ tool: 'back' }, 'https://x.test/')).ok).toBe(true);
+      expect(log).toEqual(['back']);
+    }
   });
 });
 

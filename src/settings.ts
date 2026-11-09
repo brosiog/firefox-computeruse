@@ -1,5 +1,7 @@
 export type ProviderKind = 'ollama' | 'openai' | 'chatgpt';
-export type ApprovalMode = 'ask' | 'auto';
+/** every: each action that changes the page or tabs asks; ask: submits, sends, deletes, payments and passwords ask;
+ *  auto: only payments and passwords ask; off: nothing asks, the agent runs on its own. */
+export type ApprovalMode = 'every' | 'ask' | 'auto' | 'off';
 export type Structured = 'auto' | 'schema' | 'json' | 'off';
 export type Effort = 'default' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
 

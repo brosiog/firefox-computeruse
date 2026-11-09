@@ -145,10 +145,15 @@ Firefox has no `chrome.debugger`/CDP, so this replaces Nanobrowser's whole contr
   page keys, Space and Enter activation. `target=_blank` links are opened by the extension (the popup blocker would stop
   them otherwise). Every action dispatches at most once.
 - **Frames.** Frames are spliced in where their `<iframe>` sits, with short aliases (`[1:4]`), including cross-origin ones.
-- **Approvals.** Gating is decided in the page before dispatch:
-  - Ask mode (the default) asks before submit, send and delete actions.
-  - Payments and passwords ask in both modes.
-  - Search forms, consent banners and plain navigation links never ask.
+- **Approvals.** Gating is decided in the page before dispatch. *Settings → Approvals* has four levels:
+  - **Every action** asks before each click, typing, dropdown choice, key press, navigation and tab change. Reading,
+    finding, scrolling, hovering and screenshots don't ask. Declining one action declines only that action.
+  - **Ask** (the default) asks before submits, sends and deletes, and before payments and passwords.
+  - **Auto** asks only before payments and passwords.
+  - **Full auto** never asks, and the agent runs on its own. A red *full auto* pill shows in the header while it is on.
+  - Cross-site form submissions and actions on page text aimed at AI agents (likely prompt injection) ask at every
+    level; in Full auto they are refused without asking, and the agent carries on with the task.
+  - Below Every action, search forms, consent banners and plain navigation links never ask.
 - **Page text is data.** Page text reaches the model inside `<page>…</page>`, and the system prompt says it is data, not
   instructions. See [Prompt-injection defenses](#prompt-injection-defenses).
 - **Vision (optional).** For vision models there is a `screenshot` tool that draws refs on the page (set-of-marks),
@@ -169,7 +174,7 @@ deterministic checks in the probe and the agent loop. None of them costs a model
   and that they are not from the user. The detector also tests accessible names, so an instruction hidden in an
   `aria-label` is caught.
 - **Taint and approval.** Controls that belong to an injected block (its links, an injected dialog's buttons) need the
-  user's approval, in every mode. Closing a dialog never does. The taint stays local: it spreads to a container only when
+  user's approval at every approval level (Full auto refuses them instead of asking). Closing a dialog never does. The taint stays local: it spreads to a container only when
   the injection is nearly all of that container, so a page's own Save or Next button is never caught.
 - **Navigation provenance.** The agent can only type a URL that a page offered as a link, that is on the same site, or
   that the user named in the task. A URL carrying data to a third party is blocked with an explanation.
@@ -194,8 +199,9 @@ long-polls it on `127.0.0.1:47823`; set this in *Settings → Agent bridge*, or 
 | `browser_act` | One or more actions (same vocabulary as the built-in agent), then the new page state in the same reply. |
 | `browser_task` | Hands a whole chore to the extension's local-model agent and returns its answer. It's cheap on the caller's context. |
 
-Actions run with the same probe and approval gates as the built-in agent. Submits, sends, deletes, payments and
-passwords wait for **Allow once** in the sidebar, and each agent action is listed in the sidebar log.
+Actions run with the same probe and approval gates as the built-in agent. The sidebar's approval level applies: with
+the default, submits, sends, deletes, payments and passwords wait for **Allow once** in the sidebar. Each agent action
+is listed in the sidebar log.
 
 ```sh
 # Claude Code

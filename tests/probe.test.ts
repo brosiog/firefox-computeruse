@@ -135,6 +135,34 @@ describe('actions', () => {
     expect(clicked).toBe(1);
   });
 
+  it('every-action mode gates plain clicks, typing, selects and keys, but not scrolling', async () => {
+    const p = page(`<a href="#" id="a">More</a><input aria-label="Name"><select aria-label="Size"><option>S</option><option>L</option></select>`);
+    let clicked = 0;
+    document.getElementById('a')!.addEventListener('click', () => clicked++);
+    const s = await snap(p);
+    const all = ['act', 'write', 'delete', 'pay', 'secret'];
+    const run = (cmd: any) => p.run({ ...cmd, gate: all }) as Promise<ProbeResult>;
+    const c = await run({ op: 'click', id: refOf(s.text, 'More') });
+    expect(!c.ok && c.gate).toEqual({ risk: 'act', what: expect.stringMatching(/^click .*"More"/) });
+    expect(clicked).toBe(0);
+    const t = await run({ op: 'type', id: refOf(s.text, '"Name"'), text: 'Ada', clear: true, enter: false });
+    expect(!t.ok && t.gate?.risk).toBe('act');
+    expect(document.querySelector('input')!.value).toBe('');
+    const sel = await run({ op: 'select', id: refOf(s.text, '"Size"'), option: 'L' });
+    expect(!sel.ok && sel.gate?.risk).toBe('act');
+    expect(document.querySelector('select')!.value).toBe('S');
+    expect((await run({ op: 'key', key: 'Escape' })).ok).toBe(false);
+    expect((await run({ op: 'scroll', dir: 'down' })).ok).toBe(true);
+    expect((await run({ op: 'click', id: refOf(s.text, 'More'), approved: true })).ok).toBe(true);
+    expect(clicked).toBe(1);
+  });
+
+  it('full-auto mode gates nothing, not even payments', async () => {
+    const p = page(`<button id="b">Place order</button>`);
+    const s = await snap(p);
+    expect(((await p.run({ op: 'click', id: refOf(s.text, 'Place order'), gate: [] } as any)) as ProbeResult).ok).toBe(true);
+  });
+
   it('does not gate search submits', async () => {
     const p = page(`<form role="search" action="/s"><input name="q" aria-label="Search"><button>Search</button></form>`);
     const form = document.querySelector('form')!;

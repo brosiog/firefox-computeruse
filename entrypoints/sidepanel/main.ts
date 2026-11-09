@@ -171,6 +171,7 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
     }
     const card = el('div', 'card');
     const label: Record<string, string> = {
+      act: 'The agent wants to act on the page',
       write: 'The agent wants to submit or send something',
       delete: 'The agent wants to delete something',
       pay: 'The agent wants to make a payment or purchase',
@@ -701,6 +702,7 @@ function openSettings() {
 }
 $('gear').onclick = openSettings;
 statusBtn.onclick = openSettings;
+$('fullauto').onclick = openSettings;
 
 dlg.addEventListener('close', async () => {
   if (dlg.returnValue !== 'save') return;
@@ -729,6 +731,7 @@ function connectBridge() {
 }
 
 async function refreshStatus() {
+  $('fullauto').hidden = settings.approval !== 'off';
   statusBtn.textContent = settings.model || 'no model';
   statusBtn.className = 'pill';
   if (settings.kind === 'chatgpt') {
