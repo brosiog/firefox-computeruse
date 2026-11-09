@@ -7,6 +7,7 @@ export class Refs {
   private ids = new WeakMap<Element, number>();
   private els = new Map<number, WeakRef<Element>>();
   private shown = new Set<number>();
+  private links = new Set<string>();
 
   /** Id for an element, assigning one if needed, and marks it as shown to the agent. */
   show(el: Element): number {
@@ -17,7 +18,14 @@ export class Refs {
       this.els.set(id, new WeakRef(el));
     }
     this.shown.add(id);
+    // Where shown links point: the agent may navigate to those (a page offered them), not to URLs it made up.
+    const a = el.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (a && /^https?:/.test(a.href)) this.links.add(a.href.split('#')[0]);
     return id;
+  }
+
+  hrefs(): string[] {
+    return [...this.links];
   }
 
   peek(el: Element): number | undefined {

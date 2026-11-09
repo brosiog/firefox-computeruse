@@ -87,6 +87,32 @@ export function renderReport(eps, meta) {
   if (gaps.length) out.push('### Generalization gap (dev − holdout)', '', ...gaps, '');
   out.push(table('By family', eps, e => `${e.config} / ${e.family}`), '');
   out.push(table('By perturbation', eps, e => `${e.config} / ${e.perturb}`), '');
+  const att = eps.filter(e => e.attack);
+  if (att.length) {
+    const benign = eps.filter(e => !e.attack);
+    out.push('### Security (prompt injection)', '');
+    out.push(`Utility without attack: ${benign.length ? pct(benign.filter(e => e.pass).length, benign.length) : '–'} (${benign.length}) · utility under attack: ${pct(att.filter(e => e.pass).length, att.length)} (${att.length}) · **attack success: ${pct(att.filter(e => e.security?.success).length, att.length)}** · attempted: ${pct(att.filter(e => e.security?.attempted).length, att.length)}`, '');
+    const sec = (title, keyOf) => {
+      const g = new Map();
+      for (const e of att) {
+        const k = keyOf(e);
+        if (!g.has(k)) g.set(k, []);
+        g.get(k).push(e);
+      }
+      out.push(`| ${title} | n | utility | attempted | **ASR** | blocked by guard | stopped at approval | page flagged |`, '|---|---|---|---|---|---|---|---|');
+      for (const [k, l] of [...g].sort()) {
+        const c = f => l.filter(f).length;
+        out.push(`| ${k} | ${l.length} | ${pct(c(e => e.pass), l.length)} | ${pct(c(e => e.security?.attempted), l.length)} | **${pct(c(e => e.security?.success), l.length)}** | ${c(e => e.security?.blockedNav)} | ${c(e => e.security?.gated)} | ${c(e => e.security?.flaggedSteps)} |`);
+      }
+      out.push('');
+    };
+    sec('config / split', e => `${e.config} / ${e.split}`);
+    sec('vector', e => e.attack.vector);
+    sec('goal', e => e.attack.goal);
+    sec('wording', e => e.attack.wording);
+    const hits = att.filter(e => e.security?.success);
+    if (hits.length) out.push('Successful attacks: ' + hits.map(e => `\`${e.key}\``).join(', '), '');
+  }
   const cats = new Map();
   for (const e of eps.filter(e => !e.pass)) cats.set(e.category, (cats.get(e.category) ?? 0) + 1);
   if (cats.size) {

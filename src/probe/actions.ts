@@ -6,6 +6,7 @@
 import type { Gate, ProbeResult, Risk, ScrollDir } from '../protocol';
 import { clean, deepActive, isDisabled, isEditable, isSecretField, isTextField, nameOf, roleOf } from './dom';
 import { describe } from './snapshot';
+import { DISMISS } from './inject';
 
 type Win = Window & typeof globalThis;
 
@@ -34,9 +35,34 @@ function inConsentUi(el: Element): boolean {
   return false;
 }
 
+/** A form that submits to another site than the page's: what is in it leaves the site. */
+let topOrigin: string | null = null;
+/** Set by the probe from the host: the origin of the tab's top page (frames cannot read it themselves). */
+export function setTopOrigin(o: string | null) {
+  topOrigin = o;
+}
+
+function crossSiteForm(form: HTMLFormElement | null): string | null {
+  if (!form) return null;
+  try {
+    const target = new URL(form.action || form.ownerDocument.location.href, form.ownerDocument.location.href);
+    if (!/^https?:$/.test(target.protocol)) return null;
+    // Compared with the site the user is on: a third-party frame's own form counts as another site too.
+    const site = topOrigin ?? form.ownerDocument.location.origin;
+    return target.origin !== site ? target.host : null;
+  } catch {
+    return null;
+  }
+}
+
 export function classifyClick(el: Element): Gate {
   const label = `${nameOf(el, 100)} ${el.getAttribute('value') ?? ''} ${el.getAttribute('aria-label') ?? ''}`;
   const what = describe(el);
+  const formOf = el.closest('form') as HTMLFormElement | null;
+  const xs = crossSiteForm(formOf);
+  if (xs && el.matches('button, input[type=submit], input[type=image], [role=button], a, [onclick]')) {
+    return { risk: 'exfil', what: `${what}, which sends the form to another site (${xs})` };
+  }
   if (inConsentUi(el)) return { risk: 'read', what };
   // A plain link to another page is navigation, whatever its label ("Proceed to checkout", "Delete account" settings
   // page). Script links (#, javascript:) can act, so they are judged by label like buttons.
@@ -63,6 +89,8 @@ export function classifyClick(el: Element): Gate {
 function classifyEnter(field: Element): Gate {
   const what = `Enter in ${describe(field)}`;
   const form = (field as HTMLInputElement).form ?? null;
+  const xs = crossSiteForm(form);
+  if (xs) return { risk: 'exfil', what: `${what}, which sends the form to another site (${xs})` };
   if (field.tagName === 'TEXTAREA' || isEditable(field)) {
     // Chat-style composers send on Enter.
     return isSearchForm(form, field) ? { risk: 'read', what } : { risk: 'write', what: `send via ${what}` };
@@ -221,6 +249,22 @@ export interface ActCtx {
   doc: Document;
   approved: boolean;
   gated: (risk: Risk) => boolean;
+  /** The element sits on page text written to AI agents. */
+  isTainted?: (el: Element) => boolean;
+}
+
+/** Acting on an element that came with injected text is the user's call, except closing a dialog. */
+function suspicious(el: Element, ctx: ActCtx, verb: string): Gate | null {
+  // A link inside a frame embedded from another site (an ad, a "sponsored" box) leads where that site wants, not
+  // where the user's page does: following one is the user's call.
+  const a = el.closest('a[href]');
+  const own = el.ownerDocument.location.origin;
+  if (a && topOrigin && own !== topOrigin && own !== 'null') {
+    return { risk: 'suspicious', what: `${verb} ${describe(el)}, a link inside a frame from another site (${el.ownerDocument.location.host})` };
+  }
+  if (!ctx.isTainted?.(el)) return null;
+  if (DISMISS.test(nameOf(el, 40).trim())) return null;
+  return { risk: 'suspicious', what: `${verb} ${describe(el)}, which is part of page text written to AI agents (possible prompt injection)` };
 }
 
 function withheld(g: Gate): ProbeResult {
@@ -235,6 +279,8 @@ export function click(el: Element, ctx: ActCtx): ProbeResult {
   if (tag === 'INPUT' && (el as HTMLInputElement).type === 'file') {
     return { ok: false, error: 'File pickers cannot be opened by the agent. Ask the user to choose the file.' };
   }
+  const sus = suspicious(el, ctx, 'click');
+  if (sus && !ctx.approved && ctx.gated('suspicious')) return withheld(sus);
   const g = classifyClick(el);
   if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
 
@@ -273,6 +319,8 @@ export function type(el: Element, text: string, clear: boolean, enter: boolean, 
   }
   if ((el as HTMLInputElement).readOnly) return { ok: false, error: `${describe(el)} is read-only.` };
   if (isSecretField(el) && !ctx.approved && ctx.gated('secret')) return withheld({ risk: 'secret', what: `type into ${describe(el)}` });
+  const sus = suspicious(el, ctx, 'type into');
+  if (sus && !ctx.approved && ctx.gated('suspicious')) return withheld(sus);
   if (enter) {
     const g = classifyEnter(el);
     if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);

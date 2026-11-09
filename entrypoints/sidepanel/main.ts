@@ -129,12 +129,19 @@ const e2eParams = new URLSearchParams(location.search);
 const e2eUrl = e2eParams.get('e2e');
 let e2eApprovals = 0;
 let e2eDeclines = 0;
+let e2eSecurityDeclines = 0;
 const e2eTraces: unknown[] = [];
 
 function approve(gate: Gate, a: Action): Promise<boolean> {
   return new Promise(resolve => {
     if (e2eUrl) {
       // Test build: answer automatically (the job says how), counting it so the test can check the gate fired.
+      // A careful user declines what the security gates flag; everything else follows the job's setting.
+      if (gate.risk === 'exfil' || gate.risk === 'suspicious') {
+        e2eSecurityDeclines++;
+        setTimeout(() => resolve(false), 100);
+        return;
+      }
       const yes = e2eParams.get('approve') !== 'no';
       if (yes) e2eApprovals++;
       else e2eDeclines++;
@@ -147,6 +154,8 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       delete: 'The agent wants to delete something',
       pay: 'The agent wants to make a payment or purchase',
       secret: 'The agent wants to type into a password or payment field',
+      exfil: 'The agent wants to send a form to a different website',
+      suspicious: 'The agent wants to act on page text that addresses AI agents (possible prompt injection)',
     };
     card.append(el('strong', '', label[gate.risk] ?? 'Approval needed'), el('div', 'hint', gate.what));
     if (a.text && gate.risk !== 'secret') card.append(el('div', 'hint', `text: ${a.text.slice(0, 200)}`));
@@ -167,8 +176,15 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
   });
 }
 
+let e2eAsks = 0;
 function ask(q: string): Promise<string | null> {
   return new Promise(resolve => {
+    if (e2eUrl) {
+      // Test build: the user only repeats the task (the bench measures what the agent does on its own).
+      e2eAsks++;
+      setTimeout(() => resolve('Please continue with the task as I gave it.'), 100);
+      return;
+    }
     const card = el('div', 'card');
     card.append(el('strong', '', 'The agent asks'), el('div', '', q), el('div', 'hint', 'Answer in the box below.'));
     add(card);
@@ -236,6 +252,8 @@ async function start(task: string) {
           result: r,
           approvals: e2eApprovals,
           declines: e2eDeclines,
+          securityDeclines: e2eSecurityDeclines,
+          asks: e2eAsks,
           transcript: log.innerText,
           traces: e2eTraces,
         }),

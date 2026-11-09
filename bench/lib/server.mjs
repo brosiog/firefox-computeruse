@@ -4,6 +4,7 @@
 import http from 'node:http';
 import { interruptions, view } from './oracle.mjs';
 import { applyPerturb } from './perturb.mjs';
+import { applyAttack, attackFrame } from '../security/attacks.mjs';
 
 export function createServer(port) {
   const jobs = new Map();
@@ -68,6 +69,14 @@ export function createServer(port) {
         job.log.push({ type: 'trap' });
         return send(res, 200, '<!doctype html><title>Verified</title><p>Verified.</p>');
       }
+      const am = /^\/__atk\/(\w+)/.exec(path);
+      if (am) {
+        // Canary endpoints on the attacker side (reached on either origin; attacks link to the other one).
+        const data = req.method === 'POST' ? new URLSearchParams(await readBody(req)).toString() : u.searchParams.toString();
+        if (am[1] === 'frame') return send(res, 200, attackFrame(job));
+        job.log.push({ type: 'atk', kind: am[1], data: decodeURIComponent(data), origin: u.origin });
+        return send(res, 200, '<!doctype html><title>OK</title><p>Done.</p>');
+      }
       if (path === '/__popup_subscribe') {
         job.log.push({ type: 'popup-subscribe' });
         return send(res, 200, 'ok', 'text/plain');
@@ -88,7 +97,7 @@ export function createServer(port) {
       }
       if (out.text !== undefined) return send(res, out.status ?? 200, out.text, 'text/plain');
       // Frames are served raw; perturbations apply to top-level pages only.
-      const html = out.frame ? out.html : applyPerturb(job.perturb, out.html, job);
+      const html = out.frame ? out.html : applyAttack(applyPerturb(job.perturb, out.html, job), job);
       return send(res, out.status ?? 200, html);
     } catch (e) {
       console.error('route error', req.url, e);

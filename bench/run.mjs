@@ -18,12 +18,14 @@ import { renderFailures, renderReport } from './lib/report.mjs';
 import { createServer } from './lib/server.mjs';
 import { FAMILIES } from './families/index.mjs';
 import { lintPrompts } from './lint.mjs';
+import { parseAttack } from './security/attacks.mjs';
+import { rng } from './lib/gen.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 
 function args() {
   const a = process.argv.slice(2);
-  const o = { config: [], model: 'oracle', modelId: '', split: 'both', families: 'all', perturb: 'base', seeds: 2, repeat: 1, maxSteps: 25, label: '', port: 8795, budget: 0 };
+  const o = { config: [], model: 'oracle', modelId: '', split: 'both', families: 'all', perturb: 'base', attack: 'none', seeds: 2, repeat: 1, maxSteps: 25, label: '', port: 8795, budget: 0 };
   for (let i = 0; i < a.length; i++) {
     const key = a[i].replace(/^--/, '').replace(/-(\w)/g, (_, c) => c.toUpperCase());
     const val = a[i + 1];
@@ -55,6 +57,11 @@ if (lint.length) {
 const families = opt.families === 'all' ? Object.keys(FAMILIES) : String(opt.families).split(',');
 const perturbs = String(opt.perturb === 'all' ? Object.keys(PERTURBATIONS).join(',') : opt.perturb).split(',');
 const splits = opt.split === 'both' ? ['dev', 'holdout'] : [opt.split];
+// --attack none | sample | vector:goal[,…] | sample×N (N seeded samples per task)
+const attacks = String(opt.attack).split(',').flatMap(a => {
+  const m = /^sample[x×](\d+)$/.exec(a);
+  return m ? Array.from({ length: Number(m[1]) }, () => 'sample') : [a];
+});
 for (const f of families) if (!FAMILIES[f]) throw new Error(`unknown family ${f}; have ${Object.keys(FAMILIES).join(', ')}`);
 for (const p of perturbs) if (!PERTURBATIONS[p]) throw new Error(`unknown perturbation ${p}`);
 
@@ -65,8 +72,12 @@ await srv.listen();
 const modelUrl = opt.model === 'oracle' ? `${srv.origin}/v1` : opt.model;
 const modelId = opt.model === 'oracle' ? 'oracle' : opt.modelId || 'default';
 
-console.log('building the bench extension…');
-execSync('pnpm exec wxt build -b firefox', { cwd: root, stdio: 'ignore', env: { ...process.env, WXT_E2E_URL: srv.origin } });
+// --ext <dir>: install a prebuilt bench extension instead (e.g. an older version, for before/after comparisons).
+const extDir = opt.ext ? resolve(String(opt.ext)) : resolve(root, '.output/e2e');
+if (!opt.ext) {
+  console.log('building the bench extension…');
+  execSync('pnpm exec wxt build -b firefox', { cwd: root, stdio: 'ignore', env: { ...process.env, WXT_E2E_URL: srv.origin } });
+}
 const { DEFAULTS } = await import(resolve(root, 'bench/.build/core.mjs'));
 
 // ---------- the matrix ----------
@@ -77,26 +88,30 @@ for (const cfg of configs)
     for (let s = 0; s < opt.seeds; s++)
       for (const family of families)
         for (const perturb of perturbs)
+          for (const [ai, attackSpec] of attacks.entries())
           for (let r = 0; r < opt.repeat; r++) {
             const seed = (split === 'dev' ? 1000 : 9000) + s * 17 + Object.keys(FAMILIES).indexOf(family);
             const ctx = makeCtx(split, seed);
             const inst = FAMILIES[family].make(ctx);
+            const attack = attackSpec === 'none' ? null : parseAttack(attackSpec, { split }, rng(seed * 31 + ai * 7919 + 13));
+            const akey = attack ? `.a-${attack.vector}-${attack.goal}-${attack.wording}` : '';
             jobs.push({
               id: `j${++i}`,
-              key: `${split}.${family}.${perturb}.s${seed}.r${r}`,
+              key: `${split}.${family}.${perturb}${akey}.s${seed}.r${r}`,
+              attack,
               config: cfg.name,
               split, family, perturb, seed, rep: r, ctx, inst, data: inst.data,
-              timeoutMs: opt.model === 'oracle' ? 90000 : 600000,
+              timeoutMs: opt.timeoutSec ? Number(opt.timeoutSec) * 1000 : opt.model === 'oracle' ? 90000 : 600000,
               settings: { ...DEFAULTS, kind: 'openai', baseUrl: modelUrl, model: modelId, maxSteps: opt.maxSteps, approval: 'ask', ...cfg.over },
             });
           }
-console.log(`${jobs.length} jobs: ${configs.length} config(s) × ${splits.join('+')} × ${opt.seeds} seed(s) × ${families.length} families × ${perturbs.length} perturbation(s) × ${opt.repeat} repeat(s)`);
+console.log(`${jobs.length} jobs: ${configs.length} config(s) × ${splits.join('+')} × ${opt.seeds} seed(s) × ${families.length} families × ${perturbs.length} perturbation(s) × ${attacks.length} attack(s) × ${opt.repeat} repeat(s)`);
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const outDir = resolve(root, 'bench/.results', `${stamp}${opt.label ? '-' + opt.label : ''}`);
 mkdirSync(resolve(outDir, 'traces'), { recursive: true });
 
-const browser = await puppeteer.launch({
+const launch = () => puppeteer.launch({
   browser: 'firefox',
   executablePath: ff,
   headless: true,
@@ -107,36 +122,45 @@ const browser = await puppeteer.launch({
     'dom.min_background_timeout_value_without_budget_throttling': 4,
     'dom.timeout.enable_budget_timer_throttling': false },
 });
+let browser = await launch();
+let restarts = 0;
 const episodes = [];
 const t0 = Date.now();
 try {
   const done = jobs.map(j => srv.enqueue(j));
-  await browser.installExtension(resolve(root, '.output/e2e'));
+  await browser.installExtension(extDir);
   let finished = 0;
   for (const [idx, p] of done.entries()) {
     const job = jobs[idx];
     // Each job also has its own wall-clock limit, enforced here as well as in the extension.
     const timedOut = new Promise(r => setTimeout(() => r(null), job.timeoutMs + 30000 + idx * 0));
     const got = await Promise.race([p, timedOut]);
+    // A hung job can wedge the extension's job loop (older builds wait forever on a question to the user), and then
+    // every later job would "time out" with 0 steps. Restart Firefox so one hang costs one episode, not the run.
+    if (!got) {
+      await browser.close().catch(() => {});
+      browser = await launch();
+      await browser.installExtension(extDir);
+      restarts++;
+    }
     const a = analyze(job, got ? job.report : null);
     const ep = {
       id: job.id, key: job.key, config: job.config, split: job.split, family: job.family, perturb: job.perturb, seed: job.seed, rep: job.rep,
       goal: job.inst.goal, pass: a.pass, reason: a.reason, category: a.category, answer: a.answer, success: a.success,
-      metrics: a.metrics, firstWrong: a.firstWrong, steps: a.steps.map(({ action, ...s }) => ({ ...s, action })),
+      metrics: a.metrics, firstWrong: a.firstWrong, attack: job.attack, security: a.security, steps: a.steps.map(({ action, ...s }) => ({ ...s, action })),
     };
     episodes.push(ep);
     writeFileSync(resolve(outDir, 'traces', `${job.id}.json`), JSON.stringify({ ...ep, traces: job.report?.traces ?? [], transcript: job.report?.transcript }, null, 1));
     finished++;
     const m = a.metrics;
     console.log(`${String(finished).padStart(3)}/${jobs.length} ${a.pass ? 'PASS' : 'FAIL'} ${job.config.padEnd(8)} ${job.key.padEnd(34)} ${String(m.steps).padStart(2)} steps ${((m.wallMs ?? 0) / 1000).toFixed(1).padStart(5)}s ${a.pass ? '' : `${a.category}: ${a.reason}`}`);
-    if (!got) break; // the extension is stuck on this job; later jobs would wait behind it
   }
 } finally {
   await browser.close().catch(() => {});
   srv.close();
 }
 
-const meta = { label: opt.label || stamp, when: new Date().toISOString(), model: modelId, wallSec: (Date.now() - t0) / 1000, opt };
+const meta = { label: opt.label || stamp, when: new Date().toISOString(), model: modelId, wallSec: (Date.now() - t0) / 1000, restarts, opt };
 writeFileSync(resolve(outDir, 'episodes.jsonl'), episodes.map(e => JSON.stringify(e)).join('\n') + '\n');
 writeFileSync(resolve(outDir, 'meta.json'), JSON.stringify(meta, null, 1));
 const report = renderReport(episodes, meta);
