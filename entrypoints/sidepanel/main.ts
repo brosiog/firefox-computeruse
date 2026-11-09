@@ -1,6 +1,6 @@
 import { runAgent, type AgentEvent } from '../../src/agent/loop';
 import type { Action } from '../../src/agent/tools';
-import { createHost } from '../../src/browser/host';
+import { createHost, restrictedReason } from '../../src/browser/host';
 import { chat, listModels, modelInfo, prewarm, type Usage } from '../../src/llm/client';
 import { primer, systemPrompt } from '../../src/agent/prompt';
 import type { Gate } from '../../src/protocol';
@@ -111,6 +111,17 @@ function onEvent(e: AgentEvent) {
         cur.res.textContent = `unusable reply: ${e.error}\n${e.raw.slice(0, 200)}`;
       }
       break;
+    case 'attached':
+      add(
+        el(
+          'div',
+          'note',
+          e.tabs
+            .map(t => (t.error ? `tab ${t.n}: could not read (${t.error})` : `read tab ${t.n} "${t.title.slice(0, 40)}" (${k(t.chars)} chars)`))
+            .join(' · '),
+        ),
+      );
+      break;
     case 'compacted':
       add(el('div', 'note', 'older steps were summarized to fit the context window'));
       break;
@@ -201,7 +212,7 @@ function ask(q: string): Promise<string | null> {
     input.focus();
     pendingAsk = v => {
       pendingAsk = null;
-      input.placeholder = 'What should I do?';
+      input.placeholder = 'What should I do? Type @ to attach tabs';
       resolve(v);
     };
     running?.signal.addEventListener('abort', () => pendingAsk?.(null), { once: true });
@@ -238,15 +249,185 @@ function warm(): Promise<number> {
 }
 input.addEventListener('input', () => void warm());
 
+// ---------- attached tabs (@ mentions) ----------
+// Typing @ (or the @ button) lists open tabs; each one picked becomes a chip. When the task runs, the agent gets those
+// tabs' text up front and can switch to them, so it can work across them (compare, collect, fill one from another).
+
+interface Attached {
+  id: number;
+  title: string;
+  url: string;
+  icon?: string;
+}
+const MAX_ATTACH = 6;
+let attached: Attached[] = [];
+let menu: { start: number; items: any[]; sel: number } | null = null;
+let menuSeq = 0;
+const mentions = $('mentions');
+const attachbar = $('attachbar');
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+};
+// Only icons that need no network request: a remote favicon would be fetched from the extension page.
+const iconOf = (t: any): string | undefined => (typeof t.favIconUrl === 'string' && t.favIconUrl.startsWith('data:image/') ? t.favIconUrl : undefined);
+
+function tabChip(a: Attached, onRemove?: () => void): HTMLElement {
+  const c = el('span', 'tabchip');
+  c.title = `${a.title}\n${a.url}`;
+  if (a.icon) {
+    const img = el('img');
+    img.src = a.icon;
+    img.alt = '';
+    c.append(img);
+  }
+  c.append(el('span', 't', a.title || hostOf(a.url)));
+  if (onRemove) {
+    const x = el('button', '', '×');
+    x.type = 'button';
+    x.title = 'Remove';
+    x.setAttribute('aria-label', `Remove ${a.title}`);
+    x.onclick = () => {
+      onRemove();
+      input.focus();
+    };
+    c.append(x);
+  }
+  return c;
+}
+
+function renderAttached() {
+  attachbar.innerHTML = '';
+  for (const a of attached) attachbar.append(tabChip(a, () => ((attached = attached.filter(x => x.id !== a.id)), renderAttached())));
+  attachbar.hidden = !attached.length;
+}
+
+/** The @word being typed at the caret, if any. */
+function mentionAt(): { start: number; q: string } | null {
+  const pos = input.selectionStart;
+  if (pos !== input.selectionEnd) return null;
+  const m = /(^|\s)@([^\s@]*)$/.exec(input.value.slice(0, pos));
+  return m ? { start: pos - m[2].length - 1, q: m[2].toLowerCase() } : null;
+}
+
+function closeMenu() {
+  menu = null;
+  menuSeq++;
+  mentions.hidden = true;
+  input.setAttribute('aria-expanded', 'false');
+  input.removeAttribute('aria-activedescendant');
+}
+
+async function updateMenu() {
+  const at = pendingAsk ? null : mentionAt();
+  if (!at) return closeMenu();
+  const seq = ++menuSeq;
+  const [all, win] = await Promise.all([browser.tabs.query({}), browser.windows.getCurrent()]);
+  if (seq !== menuSeq) return;
+  const words = at.q.split(/\s+/).filter(Boolean);
+  const items = (all as any[])
+    .filter(t => !restrictedReason(t.url ?? ''))
+    .filter(t => words.every(w => `${t.title ?? ''} ${t.url ?? ''}`.toLowerCase().includes(w)))
+    // This window first, in tab order; then other windows, most recently used first.
+    .sort((a, b) => (a.windowId === win.id ? 0 : 1) - (b.windowId === win.id ? 0 : 1) || (a.windowId === win.id ? a.index - b.index : (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0)))
+    .slice(0, 40);
+  menu = { start: at.start, items, sel: Math.min(menu?.sel ?? 0, Math.max(0, items.length - 1)) };
+  mentions.innerHTML = '';
+  mentions.append(el('div', 'head', attached.length >= MAX_ATTACH ? `At most ${MAX_ATTACH} tabs` : 'Attach a tab the agent can read and use'));
+  if (!items.length) mentions.append(el('div', 'none', at.q ? `No tab matches "${at.q}"` : 'No other tabs the agent can read'));
+  items.forEach((t, i) => {
+    const on = attached.some(a => a.id === t.id);
+    const o = el('div', on ? 'on' : '');
+    o.id = `mention-${i}`;
+    o.setAttribute('role', 'option');
+    o.setAttribute('aria-selected', String(i === menu!.sel));
+    // A fixed slot, so titles line up whether or not the tab has an icon.
+    const slot = el('span', 'ico');
+    const icon = iconOf(t);
+    if (icon) {
+      const img = el('img');
+      img.src = icon;
+      img.alt = '';
+      slot.append(img);
+    }
+    o.append(slot);
+    const txt = el('div', 'txt');
+    txt.append(el('div', 'title', t.title || hostOf(t.url)), el('div', 'host', hostOf(t.url)));
+    o.append(txt);
+    const tag = on ? '✓ attached' : t.active && t.windowId === win.id ? 'current' : t.windowId !== win.id ? 'other window' : '';
+    if (tag) o.append(el('span', 'tag', tag));
+    // mousedown, not click: the textarea keeps focus and the caret.
+    o.addEventListener('mousedown', ev => {
+      ev.preventDefault();
+      pick(i);
+    });
+    mentions.append(o);
+  });
+  mentions.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  moveSel(0);
+}
+
+function moveSel(d: number) {
+  if (!menu || !menu.items.length) return;
+  menu.sel = (menu.sel + d + menu.items.length) % menu.items.length;
+  mentions.querySelectorAll('[role=option]').forEach((o, i) => o.setAttribute('aria-selected', String(i === menu!.sel)));
+  input.setAttribute('aria-activedescendant', `mention-${menu.sel}`);
+  $(`mention-${menu.sel}`)?.scrollIntoView({ block: 'nearest' });
+}
+
+/** Attaches (or detaches, if already attached) the menu's i-th tab, and replaces the typed @word with @host. */
+function pick(i: number) {
+  if (!menu) return;
+  const t = menu.items[i];
+  if (!t) return;
+  const caret = input.selectionStart;
+  const has = attached.some(a => a.id === t.id);
+  let token = '';
+  if (has) attached = attached.filter(a => a.id !== t.id);
+  else if (attached.length < MAX_ATTACH) {
+    attached.push({ id: t.id, title: t.title ?? '', url: t.url ?? '', icon: iconOf(t) });
+    token = `@${hostOf(t.url ?? '')} `;
+  } else return;
+  input.value = input.value.slice(0, menu.start) + token + input.value.slice(caret);
+  const pos = menu.start + token.length;
+  input.setSelectionRange(pos, pos);
+  renderAttached();
+  closeMenu();
+  input.focus();
+}
+
+input.addEventListener('input', () => void updateMenu());
+input.addEventListener('click', () => void updateMenu());
+input.addEventListener('blur', () => setTimeout(() => document.activeElement !== input && closeMenu(), 0));
+$('at').onclick = () => {
+  const pos = input.selectionStart;
+  const pre = input.value.slice(0, pos);
+  const ins = (pre && !/\s$/.test(pre) ? ' ' : '') + '@';
+  input.setRangeText(ins, pos, input.selectionEnd, 'end');
+  input.focus();
+  void updateMenu();
+};
+
 /** Runs the built-in agent. `fromAgent`: a coding agent delegated the task over the bridge; questions go back to it. */
-async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{ success: boolean; answer: string } | null> {
+async function start(task: string, fromAgent?: { maxSteps?: number }, tabs: Attached[] = []): Promise<{ success: boolean; answer: string } | null> {
   if (running) return null;
   if (!settings.model) {
     if (fromAgent) return { success: false, answer: 'No model is configured in the Firefox Computer Use settings.' };
     openSettings();
     return null;
   }
-  add(el('div', 'msg user', fromAgent ? `agent: ${task}` : task));
+  const bubble = el('div', 'msg user', fromAgent ? `agent: ${task}` : task);
+  if (tabs.length) {
+    const row = el('div', 'tabs');
+    for (const a of tabs) row.append(tabChip(a));
+    bubble.append(row);
+  }
+  add(bubble);
   const ctrl = (running = new AbortController());
   go.textContent = 'Stop';
   go.classList.add('stop');
@@ -259,8 +440,9 @@ async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{
   const s = fromAgent?.maxSteps ? { ...settings, maxSteps: fromAgent.maxSteps } : settings;
   try {
     const { tabId, windowId } = await targetTab();
-    const host = createHost(tabId, windowId);
-    let r = await runAgent({ task, settings: s, host, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal });
+    const ids = tabs.map(a => a.id);
+    const host = createHost(tabId, windowId, ids);
+    let r = await runAgent({ task, settings: s, host, tabs: ids, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal });
     if (question) r = { success: false, answer: `The agent needs more information: ${question}` };
     (window as any).__lastResult = r;
     if (e2eUrl) {
@@ -307,9 +489,28 @@ $('composer').addEventListener('submit', ev => {
   }
   if (!v) return;
   input.value = '';
-  void start(v);
+  const tabs = attached;
+  attached = [];
+  renderAttached();
+  closeMenu();
+  void start(v, undefined, tabs);
 });
 input.addEventListener('keydown', ev => {
+  if (menu && !ev.isComposing) {
+    const keys: Record<string, () => void> = {
+      ArrowDown: () => moveSel(1),
+      ArrowUp: () => moveSel(-1),
+      Enter: () => pick(menu!.sel),
+      Tab: () => pick(menu!.sel),
+      Escape: closeMenu,
+    };
+    const f = keys[ev.key];
+    if (f && (menu.items.length || ev.key === 'Escape')) {
+      ev.preventDefault();
+      f();
+      return;
+    }
+  }
   if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
     ev.preventDefault();
     $<HTMLFormElement>('composer').requestSubmit();
@@ -318,8 +519,22 @@ input.addEventListener('keydown', ev => {
 $('new').onclick = () => {
   if (running) return;
   log.innerHTML = '';
+  attached = [];
+  renderAttached();
   input.focus();
 };
+
+/** Test builds only: `attach=<url prefix>|<url prefix>` attaches the first tab matching each, as @ mentions would. */
+async function e2eAttach(): Promise<Attached[]> {
+  const want = e2eUrl ? e2eParams.get('attach') : null;
+  if (!want) return [];
+  const all: any[] = await browser.tabs.query({});
+  return want
+    .split('|')
+    .map(p => all.find(t => t.url?.startsWith(p)))
+    .filter(Boolean)
+    .map(t => ({ id: t.id, title: t.title ?? '', url: t.url ?? '' }));
+}
 
 // ---------- settings ----------
 
@@ -484,6 +699,6 @@ $('grant').onclick = async () => {
     const ms = await warm();
     add(el('div', 'note', `prewarm ${Math.round(ms)}ms`));
   } else void warm();
-  if (task) void start(task);
+  if (task) void start(task, undefined, await e2eAttach());
   else input.focus();
 })();

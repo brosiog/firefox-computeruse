@@ -25,6 +25,19 @@ export interface TabInfo {
   active: boolean;
 }
 
+/** Another tab's text, read once for the model (a tab the user attached to the task). */
+export interface TabRead {
+  /** The tab's number in the agent's tab list (stable for the run). */
+  n: number;
+  url: string;
+  title: string;
+  /** Page text, refs left out (they would read as refs on the current page). */
+  text: string;
+  links: string[];
+  /** Set when the tab could not be read. */
+  error?: string;
+}
+
 export interface Host {
   tabId: number;
   observe(budget: number): Promise<Observation>;
@@ -38,6 +51,8 @@ export interface Host {
   switchTab(n: number): Promise<string>;
   closeTab(): Promise<string>;
   screenshot(marks: boolean): Promise<string | null>;
+  /** Reads another tab's text without switching to it. Attached tabs are numbered right after the start tab. */
+  readTab?(id: number, budget: number): Promise<TabRead>;
 }
 
 const RESTRICTED = /^(about:|moz-extension:|chrome:|resource:|view-source:|data:|blob:|file:|jar:)|^https:\/\/(addons\.mozilla\.org|accounts-static\.cdn\.mozilla\.net|support\.mozilla\.org)\//;
@@ -76,10 +91,15 @@ async function waitComplete(tabId: number, maxMs: number): Promise<void> {
   }
 }
 
-export function createHost(initialTabId: number, windowId: number): Host {
+/**
+ * `attached`: tabs the user attached to the task (any window). They are numbered right after the start tab, and they
+ * stay in the tab list even when they live in another window.
+ */
+export function createHost(initialTabId: number, windowId: number, attached: number[] = []): Host {
   let tabId = initialTabId;
   // Tabs the agent knows, numbered in the order it met them, so numbers stay stable for the model.
-  const order: number[] = [initialTabId];
+  const order: number[] = [initialTabId, ...attached.filter((id, i) => id !== initialTabId && attached.indexOf(id) === i)];
+  const pinned = new Set(order);
   // Firefox frame ids are large numbers (17179869185); the model sees small per-tab aliases (1, 2, …) instead.
   const aliasOf = new Map<number, number>();
   const frameOf = new Map<number, number>();
@@ -99,20 +119,20 @@ export function createHost(initialTabId: number, windowId: number): Host {
     return { frameId: frameOf.get(Number(m[1])) ?? -1, id: Number(m[2]) };
   };
 
-  const inject = async () => {
-    await browser.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['/probe.js'] });
+  const inject = async (tid = tabId) => {
+    await browser.scripting.executeScript({ target: { tabId: tid, allFrames: true }, files: ['/probe.js'] });
   };
 
-  const run = async (frameId: number, cmd: unknown): Promise<any> => {
+  const run = async (frameId: number, cmd: unknown, tid = tabId): Promise<any> => {
     const exec = () =>
       browser.scripting.executeScript({
-        target: { tabId, frameIds: [frameId] },
+        target: { tabId: tid, frameIds: [frameId] },
         func: (c: any) => (globalThis as any).__fcu?.run(c) ?? { ok: false, error: '__noprobe' },
         args: [cmd],
       });
     let res = await exec();
     if (res?.[0]?.result?.error === '__noprobe') {
-      await inject();
+      await inject(tid);
       res = await exec();
     }
     if (res?.[0]?.error) throw new Error(String(res[0].error?.message ?? res[0].error));
@@ -267,7 +287,8 @@ export function createHost(initialTabId: number, windowId: number): Host {
     },
 
     async tabs() {
-      const all: any[] = await browser.tabs.query({ windowId });
+      // This window's tabs, plus attached tabs wherever they are.
+      const all: any[] = (await browser.tabs.query({})).filter((t: any) => t.windowId === windowId || pinned.has(t.id));
       for (const t of all) if (!order.includes(t.id)) order.push(t.id);
       const live = new Set(all.map(t => t.id));
       for (let i = order.length - 1; i >= 0; i--) if (!live.has(order[i])) order.splice(i, 1);
@@ -310,11 +331,41 @@ export function createHost(initialTabId: number, windowId: number): Host {
       try {
         await browser.tabs.update(tabId, { active: true });
         if (marks) await run(0, { op: 'marks', show: true }).catch(() => {});
-        const url: string = await browser.tabs.captureVisibleTab(windowId, { format: 'jpeg', quality: 70 });
+        // An attached tab can live in another window.
+        const win = (await browser.tabs.get(tabId)).windowId ?? windowId;
+        const url: string = await browser.tabs.captureVisibleTab(win, { format: 'jpeg', quality: 70 });
         if (marks) await run(0, { op: 'marks', show: false }).catch(() => {});
         return await downscale(url, 1024);
       } catch {
         return null;
+      }
+    },
+
+    async readTab(id, budget) {
+      const n = (await host.tabs()).find(t => t.id === id)?.n ?? 0;
+      let tab: any;
+      try {
+        tab = await browser.tabs.get(id);
+      } catch {
+        return { n, url: '', title: '', text: '', links: [], error: 'the tab was closed' };
+      }
+      const base = { n, url: tab.url ?? '', title: tab.title ?? '', links: [] as string[] };
+      const why = restrictedReason(base.url);
+      if (why) return { ...base, text: '', error: why };
+      try {
+        // Firefox unloads background tabs it has not shown for a while; they have no document to read until reloaded.
+        if (tab.discarded) {
+          await browser.tabs.reload(id);
+          await new Promise(r => setTimeout(r, 150));
+        }
+        await waitComplete(id, 10000);
+        await inject(id);
+        const r = (await run(0, { op: 'read', offset: 0, budget, plain: true }, id)) as ProbeResult | undefined;
+        if (!r?.ok) return { ...base, text: '', error: r?.error ?? 'no result from the page' };
+        const now = await browser.tabs.get(id);
+        return { ...base, url: now.url ?? base.url, title: now.title ?? base.title, text: r.msg, links: r.links ?? [] };
+      } catch (e) {
+        return { ...base, text: '', error: `the page could not be read (${(e as Error).message ?? e})` };
       }
     },
   };

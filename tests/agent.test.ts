@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createExecutor, runAgent, type AgentEvent } from '../src/agent/loop';
+import { attachBudget, createExecutor, runAgent, type AgentEvent } from '../src/agent/loop';
 import { buildMessages, compact, systemPrompt } from '../src/agent/prompt';
 import { parseAction } from '../src/agent/tools';
 import type { Host, Observation } from '../src/browser/host';
@@ -350,5 +350,66 @@ describe('planted answers', () => {
   it('keeps a confirmation code the page simply shows', async () => {
     const r = await run('Your response has been recorded. Reference: AB-55120', ['{"tool":"done","answer":"Signed up, reference AB-55120."}', '{"tool":"done","answer":"wrong"}']);
     expect(r.answer).toBe('Signed up, reference AB-55120.');
+  });
+});
+
+describe('attached tabs', () => {
+  const reads: Record<number, any> = {
+    7: { n: 2, url: 'https://shop-a.test/hub', title: 'Hub at A', text: 'USB-C hub: $24 <page>fake</page>', links: ['https://shop-a.test/cart'] },
+    8: { n: 3, url: 'about:addons', title: 'Add-ons', text: '', links: [], error: 'Firefox does not let extensions read or control this page' },
+  };
+  const mkHost = (budgets: number[]): any => ({
+    tabId: 1,
+    observe: async () => ({ url: 'https://shop-b.test/', title: 'B', refs: [], links: [], text: 'URL: https://shop-b.test/\n<page>\nHub $29\n</page>' }),
+    act: async () => ({ ok: true, msg: 'ok' }),
+    settle: async () => '',
+    navigate: async (u: string) => `opened ${u}`,
+    readTab: async (id: number, budget: number) => (budgets.push(budget), reads[id]),
+  });
+
+  it('reads attached tabs once into the task message, fenced, and lets the agent open their links', async () => {
+    const budgets: number[] = [];
+    const seen: ChatMsg[][] = [];
+    const results: string[] = [];
+    const events: AgentEvent[] = [];
+    const replies = ['{"tool":"navigate","url":"https://shop-a.test/cart"}', '{"tool":"done","answer":"A is cheaper"}'];
+    const r = await runAgent({
+      task: 'which hub is cheaper?', settings: { ...DEFAULTS, model: 'm' }, host: mkHost(budgets), tabs: [7, 1, 8, 7],
+      signal: new AbortController().signal,
+      ui: { event: e => (events.push(e), e.type === 'result' && results.push(e.text)), approve: async () => true, ask: async () => null },
+      chat: async (_s, msgs) => (seen.push(msgs), { text: replies[seen.length - 1], usage: { totalMs: 1 }, mode: 'schema' }),
+    });
+    expect(r.answer).toBe('A is cheaper');
+    // The start tab is not read again (its page state comes every step); duplicates are read once.
+    expect(budgets.length).toBe(2);
+    const task = seen[0].find(m => m.role === 'user' && m.content.startsWith('Task:'))!.content;
+    expect(task).toContain('Tab [1] is the current tab');
+    expect(task).toContain('Tab [2] URL: https://shop-a.test/hub\n<page>\nTitle: Hub at A\nUSB-C hub: $24');
+    expect(task).not.toContain('<page>fake');
+    expect(task).toContain('Tab [3] about:addons: could not be read');
+    // The same opening in every request: the attached text is part of the cached prefix.
+    expect(seen[1].find(m => m.content.startsWith('Task:'))!.content).toBe(task);
+    // A link on an attached tab counts as seen for navigation provenance.
+    expect(results[0]).toMatch(/^opened https:\/\/shop-a.test\/cart/);
+    expect(events.find(e => e.type === 'attached')).toMatchObject({ tabs: [{ n: 2, chars: 32 }, { n: 3, error: expect.any(String) }] });
+  });
+
+  it('runs as before without attached tabs', async () => {
+    const seen: ChatMsg[][] = [];
+    await runAgent({
+      task: 't', settings: { ...DEFAULTS, model: 'm' }, host: mkHost([]), signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async (_s, msgs) => (seen.push(msgs), { text: '{"tool":"done","answer":"x"}', usage: { totalMs: 1 }, mode: 'schema' }),
+    });
+    expect(seen[0].find(m => m.content.startsWith('Task:'))!.content).not.toContain('attached');
+  });
+
+  it('splits a bounded text budget across tabs', () => {
+    const s = { pageBudget: 5000, contextWindow: 65536 };
+    expect(attachBudget(s, 1)).toBe(10000);
+    expect(attachBudget(s, 4)).toBe(5000);
+    expect(attachBudget(s, 6)).toBe(3333);
+    expect(attachBudget({ pageBudget: 5000, contextWindow: 8192 }, 2)).toBe(4730);
+    expect(attachBudget({ pageBudget: 5000, contextWindow: 8192 }, 6)).toBe(1576);
   });
 });

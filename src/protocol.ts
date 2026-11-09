@@ -11,7 +11,7 @@ export type ProbeCmd =
   | { op: 'key'; key: string; id?: number; approved?: boolean }
   | { op: 'scroll'; dir: ScrollDir; id?: number; pages?: number }
   | { op: 'hover'; id: number }
-  | { op: 'read'; offset: number; budget: number; query?: string }
+  | { op: 'read'; offset: number; budget: number; query?: string; plain?: boolean }
   | { op: 'find'; text: string; limit: number }
   | { op: 'settle'; quietMs: number; maxMs: number }
   | { op: 'marks'; show: boolean };

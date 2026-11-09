@@ -50,8 +50,33 @@ export interface Step {
   result: string;
 }
 
-export function taskMessage(task: string, date: string): string {
-  return `Task: ${task}\n(Today is ${date}.)`;
+export function taskMessage(task: string, date: string, attached?: string): string {
+  return `Task: ${task}\n(Today is ${date}.)${attached ? `\n\n${attached}` : ''}`;
+}
+
+/** A tab the user attached, as read at the start of the run (see Host.readTab). */
+export interface AttachedTab {
+  n: number;
+  url: string;
+  title: string;
+  text: string;
+  error?: string;
+}
+
+/**
+ * The attached tabs' text for the task message. It is part of the fixed opening of every request, so it costs one
+ * prefill per run, not one per step. Website text (titles too) stays inside <page>, fenced like the page state.
+ * `current`: the start tab was attached too; its page state comes with every step, so only a line says so.
+ */
+export function attachedBlock(tabs: AttachedTab[], fence: (s: string) => string, current?: number): string {
+  if (!tabs.length && current === undefined) return '';
+  const out = ['The user attached these tabs to the task. Their text was read when the task started; use tab_switch to act in one or to see it change.'];
+  if (current !== undefined) out.push(`Tab [${current}] is the current tab: its page state is below.`);
+  for (const t of tabs) {
+    if (t.error) out.push(`Tab [${t.n}] ${t.url || '(unknown)'}: could not be read (${t.error}).`);
+    else out.push(`Tab [${t.n}] URL: ${t.url}\n<page>\n${fence(`Title: ${t.title || '(none)'}\n${t.text}`)}\n</page>`);
+  }
+  return out.join('\n');
 }
 
 // A fixed opening exchange. Prewarming sends exactly primer(system); every real request starts with it plus the fixed

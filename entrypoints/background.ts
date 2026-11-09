@@ -65,6 +65,11 @@ async function benchLoop(base: string) {
       setTimeout(resolve, job.timeoutMs ?? 300000);
     });
     const q = new URLSearchParams({ task: job.task, tabUrl: job.tabUrl, e2e: base, job: job.id, approve: job.approve ?? 'yes' });
+    // Tabs the job attaches to the task (the composer's @ mentions), by URL prefix: opened first, in the background.
+    if (job.attach?.length) {
+      for (const url of job.attach) await browser.tabs.create({ url, active: false });
+      q.set('attach', job.attach.join('|'));
+    }
     await browser.tabs.create({ url: browser.runtime.getURL(`/sidepanel.html?${q}`), active: false });
     await done;
     await browser.tabs.update(start.id, { active: true }).catch(() => {});

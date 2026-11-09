@@ -21,11 +21,16 @@
     <main id="log">
       <div class="empty" id="empty">
         <p>Tell the agent what to do in this tab.</p>
+        <p class="hint">Type @ to attach other tabs it can read and use.</p>
         <p class="hint">e.g. “Find the cheapest USB-C hub on this page and add it to the cart”</p>
       </div>
     </main>
+    <div id="attachbar" class="attachbar" hidden></div>
     <form id="composer">
-      <textarea id="input" rows="2" placeholder="What should I do?" autocomplete="off"></textarea>
+      <div id="mentions" class="mentions" role="listbox" aria-label="Tabs to attach" hidden></div>
+      <button id="at" type="button" class="icon" title="Attach tabs the agent can read and use (or type @)">@</button>
+      <textarea id="input" rows="2" placeholder="What should I do? Type @ to attach tabs" autocomplete="off"
+        role="combobox" aria-autocomplete="list" aria-controls="mentions" aria-expanded="false"></textarea>
       <button id="go" type="submit">Run</button>
     </form>
 
