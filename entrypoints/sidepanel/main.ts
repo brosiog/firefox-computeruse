@@ -186,7 +186,7 @@ function ask(q: string): Promise<string | null> {
     input.focus();
     pendingAsk = v => {
       pendingAsk = null;
-      input.placeholder = 'What should I do?';
+      input.placeholder = 'Ask anything';
       resolve(v);
     };
     running?.signal.addEventListener('abort', () => pendingAsk?.(null), { once: true });
@@ -221,7 +221,15 @@ function warm(): Promise<number> {
   warming = prewarm(settings, primer(sys));
   return warming;
 }
-input.addEventListener('input', () => void warm());
+function fit() {
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, window.innerHeight * 0.4)}px`;
+  go.classList.toggle('idle', !running && !input.value.trim());
+}
+input.addEventListener('input', () => {
+  fit();
+  void warm();
+});
 
 /** Runs the built-in agent. `fromAgent`: a coding agent delegated the task over the bridge; questions go back to it. */
 async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{ success: boolean; answer: string } | null> {
@@ -236,6 +244,7 @@ async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{
   go.title = 'Stop';
   go.setAttribute('aria-label', 'Stop');
   go.classList.add('stop');
+  go.classList.remove('idle');
   let question: string | null = null;
   const agentAsk = async (q: string) => {
     question = q;
@@ -272,6 +281,7 @@ async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{
     go.title = 'Run';
     go.setAttribute('aria-label', 'Run');
     go.classList.remove('stop');
+    fit();
     (window as any).__runDone = true;
   }
 }
@@ -283,6 +293,7 @@ $('composer').addEventListener('submit', ev => {
     if (!v) return;
     add(el('div', 'msg user', v));
     input.value = '';
+    fit();
     pendingAsk(v);
     return;
   }
@@ -292,6 +303,7 @@ $('composer').addEventListener('submit', ev => {
   }
   if (!v) return;
   input.value = '';
+  fit();
   void start(v);
 });
 input.addEventListener('keydown', ev => {
@@ -300,9 +312,23 @@ input.addEventListener('keydown', ev => {
     $<HTMLFormElement>('composer').requestSubmit();
   }
 });
+const emptyState = $('empty').cloneNode(true) as HTMLElement;
+function wireSuggestions(root: HTMLElement) {
+  for (const b of root.querySelectorAll<HTMLButtonElement>('[data-task]')) {
+    b.onclick = () => {
+      input.value = b.dataset.task!;
+      fit();
+      input.focus();
+    };
+  }
+}
+wireSuggestions($('empty'));
 $('new').onclick = () => {
   if (running) return;
   log.innerHTML = '';
+  const e = emptyState.cloneNode(true) as HTMLElement;
+  log.append(e);
+  wireSuggestions(e);
   input.focus();
 };
 
@@ -420,8 +446,8 @@ function connectBridge() {
 }
 
 async function refreshStatus() {
-  statusBtn.textContent = settings.model || 'no model';
-  statusBtn.className = 'pill';
+  statusBtn.querySelector('.label')!.textContent = settings.model || 'Choose a model';
+  statusBtn.className = 'model';
   try {
     const base = settings.baseUrl.replace(/\/+$/, '');
     const url = settings.kind === 'ollama' ? `${base}/api/tags` : `${base}/models`;
@@ -473,4 +499,5 @@ void followTheme(browser);
   } else void warm();
   if (task) void start(task);
   else input.focus();
+  fit();
 })();
