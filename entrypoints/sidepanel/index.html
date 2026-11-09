@@ -8,31 +8,47 @@
   </head>
   <body>
     <header>
-      <div class="brand">Computer Use</div>
-      <button id="fullauto" class="pill bad" title="The agent acts without asking, even for payments and passwords" hidden>full auto</button>
-      <span id="agents" class="pill ok" title="A coding agent is connected through the bridge" hidden>agents</span>
-      <button id="status" class="pill" title="Model server">…</button>
-      <button id="new" class="icon" title="New task">＋</button>
-      <button id="gear" class="icon" title="Settings">⚙</button>
+      <button id="status" class="model" title="Model server">
+        <span class="label">…</span>
+        <svg class="chev" viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5" /></svg>
+      </button>
+      <span class="spacer"></span>
+      <button id="fullauto" class="badge bad" title="The agent acts without asking, even for payments and passwords" hidden>full auto</button>
+      <span id="agents" class="badge ok" title="A coding agent is connected through the bridge" hidden>agents</span>
+      <button id="new" class="icon" title="New task" aria-label="New task">
+        <svg viewBox="0 0 16 16"><path d="M13.5 8.5v3a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" /><path d="m11.5 2.5 2 2L8 10l-2.5.5L6 8z" /></svg>
+      </button>
+      <button id="gear" class="icon" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 16 16"><path d="M2.5 4.5h6M12.5 4.5h1M2.5 11.5h1M7.5 11.5h6" /><circle cx="10.5" cy="4.5" r="2" /><circle cx="5.5" cy="11.5" r="2" /></svg>
+      </button>
     </header>
     <div id="perm" class="banner" hidden>
-      Firefox has not granted this extension access to websites yet.
-      <button id="grant">Allow on all sites</button>
+      <span>Firefox hasn’t given this extension access to websites yet.</span>
+      <button id="grant" class="primary">Allow on all sites</button>
     </div>
     <main id="log">
       <div class="empty" id="empty">
-        <p>Tell the agent what to do in this tab.</p>
+        <h1>What can I do in this tab?</h1>
         <p class="hint">It always sees the tab you're on. Type @ to add other tabs it can read and use.</p>
-        <p class="hint">e.g. “Find the cheapest USB-C hub on this page and add it to the cart”</p>
+        <div class="suggest">
+          <button type="button" data-task="Summarize this page">Summarize this page</button>
+          <button type="button" data-task="Find the cheapest item on this page">Find the cheapest item</button>
+          <button type="button" data-task="Fill out the form on this page">Fill out the form</button>
+        </div>
       </div>
     </main>
     <div id="attachbar" class="attachbar" hidden></div>
     <form id="composer">
       <div id="mentions" class="mentions" role="listbox" aria-label="Tabs to attach" hidden></div>
-      <button id="at" type="button" class="icon" title="Attach tabs the agent can read and use (or type @)">@</button>
-      <textarea id="input" rows="2" placeholder="What should I do? Type @ to attach tabs" autocomplete="off"
-        role="combobox" aria-autocomplete="list" aria-controls="mentions" aria-expanded="false"></textarea>
-      <button id="go" type="submit">Run</button>
+      <div class="field">
+        <button id="at" type="button" class="icon" title="Attach tabs the agent can read and use (or type @)" aria-label="Attach tabs">@</button>
+        <textarea id="input" rows="1" placeholder="Ask anything · type @ to add tabs" autocomplete="off"
+          role="combobox" aria-autocomplete="list" aria-controls="mentions" aria-expanded="false"></textarea>
+        <button id="go" type="submit" class="send" title="Run" aria-label="Run">
+          <svg class="i-run" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
+          <svg class="i-stop" viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1.2" fill="currentColor" stroke="none" /></svg>
+        </button>
+      </div>
     </form>
 
     <dialog id="settings">
@@ -125,14 +141,16 @@
           </div>
           <p class="hint">The master password goes only to bw serve on this computer. It is never stored.</p>
         </fieldset>
-        <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
-        <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>
-        <label class="check"><input name="screenshotEachStep" type="checkbox" /> Attach a screenshot every step</label>
+        <div class="checks">
+          <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
+          <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>
+          <label class="check"><input name="screenshotEachStep" type="checkbox" /> Attach a screenshot every step</label>
+        </div>
         <div class="actions">
-          <button type="button" id="test">Test connection</button>
+          <button type="button" id="test" class="ghost">Test connection</button>
           <span id="testOut" class="hint"></span>
           <span class="spacer"></span>
-          <button value="cancel" formnovalidate>Cancel</button>
+          <button value="cancel" formnovalidate class="ghost">Cancel</button>
           <button value="save" id="save" class="primary">Save</button>
         </div>
       </form>

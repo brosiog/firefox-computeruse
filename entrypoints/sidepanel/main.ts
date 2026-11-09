@@ -7,6 +7,7 @@ import type { Gate } from '../../src/protocol';
 import { createBridgeHandler, startBridge } from '../../src/bridge';
 import { askBackground, type ChatGptStatus } from '../../src/llm/chatgpt-auth';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
+import { followTheme } from '../../src/ui/theme';
 import { createVault, type Vault } from '../../src/vault';
 
 declare const browser: any;
@@ -26,6 +27,7 @@ const log = $('log');
 const input = $<HTMLTextAreaElement>('input');
 const go = $<HTMLButtonElement>('go');
 const statusBtn = $<HTMLButtonElement>('status');
+const PLACEHOLDER = 'Ask anything · type @ to add tabs';
 
 let settings: Settings = { ...DEFAULTS };
 let running: AbortController | null = null;
@@ -231,7 +233,7 @@ function ask(q: string): Promise<string | null> {
     input.focus();
     pendingAsk = v => {
       pendingAsk = null;
-      input.placeholder = 'What should I do? Type @ to attach tabs';
+      input.placeholder = PLACEHOLDER;
       resolve(v);
     };
     running?.signal.addEventListener('abort', () => pendingAsk?.(null), { once: true });
@@ -267,7 +269,15 @@ function warm(): Promise<number> {
   warming = prewarm(settings, primer(sys));
   return warming;
 }
-input.addEventListener('input', () => void warm());
+function fit() {
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, window.innerHeight * 0.4)}px`;
+  go.classList.toggle('idle', !running && !input.value.trim());
+}
+input.addEventListener('input', () => {
+  fit();
+  void warm();
+});
 
 // ---------- attached tabs (@ mentions) ----------
 // Typing @ (or the @ button) lists open tabs; each one picked becomes a chip. When the task runs, the agent gets those
@@ -478,8 +488,10 @@ async function start(task: string, fromAgent?: { maxSteps?: number }, tabs: Atta
   }
   add(bubble);
   const ctrl = (running = new AbortController());
-  go.textContent = 'Stop';
+  go.title = 'Stop';
+  go.setAttribute('aria-label', 'Stop');
   go.classList.add('stop');
+  go.classList.remove('idle');
   let question: string | null = null;
   const agentAsk = async (q: string) => {
     question = q;
@@ -516,8 +528,10 @@ async function start(task: string, fromAgent?: { maxSteps?: number }, tabs: Atta
     return { success: false, answer: `The agent crashed: ${(e as Error).message ?? e}` };
   } finally {
     running = null;
-    go.textContent = 'Run';
+    go.title = 'Run';
+    go.setAttribute('aria-label', 'Run');
     go.classList.remove('stop');
+    fit();
     (window as any).__runDone = true;
   }
 }
@@ -529,6 +543,7 @@ $('composer').addEventListener('submit', ev => {
     if (!v) return;
     add(el('div', 'msg user', v));
     input.value = '';
+    fit();
     pendingAsk(v);
     return;
   }
@@ -538,6 +553,7 @@ $('composer').addEventListener('submit', ev => {
   }
   if (!v) return;
   input.value = '';
+  fit();
   const tabs = attached;
   attached = [];
   renderAttached();
@@ -565,9 +581,23 @@ input.addEventListener('keydown', ev => {
     $<HTMLFormElement>('composer').requestSubmit();
   }
 });
+const emptyState = $('empty').cloneNode(true) as HTMLElement;
+function wireSuggestions(root: HTMLElement) {
+  for (const b of root.querySelectorAll<HTMLButtonElement>('[data-task]')) {
+    b.onclick = () => {
+      input.value = b.dataset.task!;
+      fit();
+      input.focus();
+    };
+  }
+}
+wireSuggestions($('empty'));
 $('new').onclick = () => {
   if (running) return;
   log.innerHTML = '';
+  const e = emptyState.cloneNode(true) as HTMLElement;
+  log.append(e);
+  wireSuggestions(e);
   attached = [];
   renderAttached();
   input.focus();
@@ -794,8 +824,8 @@ function connectBridge() {
 
 async function refreshStatus() {
   $('fullauto').hidden = settings.approval !== 'off';
-  statusBtn.textContent = settings.model || 'no model';
-  statusBtn.className = 'pill';
+  statusBtn.querySelector('.label')!.textContent = settings.model || 'Choose a model';
+  statusBtn.className = 'model';
   if (settings.kind === 'chatgpt') {
     try {
       const st = await askBackground<ChatGptStatus>({ type: 'chatgpt-status' });
@@ -828,6 +858,8 @@ $('grant').onclick = async () => {
   void refreshCurrent();
 };
 
+void followTheme(browser);
+
 (async () => {
   settings = await loadSettings();
   void refreshStatus();
@@ -857,4 +889,5 @@ $('grant').onclick = async () => {
   } else void warm();
   if (task) void start(task, undefined, await e2eAttach());
   else input.focus();
+  fit();
 })();
