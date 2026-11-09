@@ -107,10 +107,13 @@ export async function chat(
 ): Promise<ChatResult> {
   const key = `${s.kind}|${trimSlash(s.baseUrl)}|${s.model}`;
   const prior = learned.get(key);
-  const state = prior ?? {
-    level: (s.structured === 'auto' ? 'schema' : s.structured === 'off' ? 'off' : s.structured) as Level,
-    noThinkOk: true,
-    extrasOk: true,
+  // A copy: a schema-less call (prewarm) must not overwrite what was learned about this server's structured output.
+  const state = {
+    ...(prior ?? {
+      level: (s.structured === 'auto' ? 'schema' : s.structured === 'off' ? 'off' : s.structured) as Level,
+      noThinkOk: true,
+      extrasOk: true,
+    }),
   };
   if (!schema) state.level = 'off';
   for (let attempt = 0; attempt < 5; attempt++) {
