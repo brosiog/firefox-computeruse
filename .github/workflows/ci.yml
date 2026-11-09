@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: Oracle bench seeds per split (1 seed = 90 jobs)
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: '24'
+  PNPM_VERSION: '12.16.1'
+  FIREFOX_VERSION: '159.0.1'
+
+jobs:
+  checks:
+    name: Types, unit tests, build, add-on lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install (lockfile must be up to date)
+        run: pnpm install --frozen-lockfile
+
+      - name: Syntax-check Node scripts (not covered by tsc)
+        run: git ls-files -z '*.mjs' | xargs -0 -n1 node --check
+
+      - name: Type-check
+        run: pnpm type-check
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build release extension
+        run: pnpm build
+
+      - name: Check release build (manifest, permissions, CSP, test hooks, size)
+        run: pnpm check:build
+
+      - name: Mozilla add-on lint
+        run: pnpm lint:addon
+
+      - name: Prompt lint (no bench vocabulary in the system prompt)
+        run: pnpm bench:lint
+
+      - name: Package
+        run: pnpm zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: extension-${{ github.sha }}
+          path: .output/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  firefox:
+    name: Real Firefox (e2e, bridge, oracle bench)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Firefox
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: e2e/.cache/firefox
+          key: firefox-${{ env.FIREFOX_VERSION }}-linux-x86_64-${{ hashFiles('scripts/fetch-firefox.sh') }}
+
+      - name: Fetch Firefox ${{ env.FIREFOX_VERSION }} (checksum-verified)
+        run: scripts/fetch-firefox.sh "$FIREFOX_VERSION"
+
+      - name: e2e — full shop task with the scripted model
+        run: pnpm e2e
+
+      - name: e2e — agent bridge CLI
+        if: ${{ !cancelled() && hashFiles('e2e/bridge.mjs') != '' }}
+        run: pnpm e2e:bridge
+
+      - name: Oracle bench — every task solvable through the extension (must be 100%)
+        if: ${{ !cancelled() }}
+        env:
+          SEEDS: ${{ inputs.seeds || '1' }}
+        run: node bench/run.mjs --model oracle --perturb all --seeds "$SEEDS" --min-pass 1 --label ci
+
+      - name: Bench report → job summary
+        if: ${{ !cancelled() }}
+        run: |
+          report="$(ls -d bench/.results/*-ci 2>/dev/null | tail -1)/report.md"
+          if [ -f "$report" ]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; else echo "no bench report" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Upload e2e and bench results
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firefox-results-${{ github.sha }}
+          path: |
+            e2e/.results/
+            bench/.results/
+          if-no-files-found: ignore
+          retention-days: 14
