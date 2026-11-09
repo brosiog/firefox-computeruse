@@ -261,6 +261,8 @@ export interface ExecContext {
   task?: string;
   /** Bitwarden; without it the login tool fails. */
   vault?: Vault | null;
+  /** Tests: how long the login tool waits for a page still rendering its sign-in form. */
+  loginRetryMs?: number;
 }
 
 export interface Executor {
@@ -417,6 +419,7 @@ export function createExecutor(o: ExecContext): Executor {
           approve: o.ui.approve,
           declined,
           aborted: () => signal.aborted,
+          retryMs: o.loginRetryMs,
         });
       case 'ask': {
         const ans = await o.ui.ask(a.text ?? '');

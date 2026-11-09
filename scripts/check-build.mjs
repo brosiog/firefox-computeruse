@@ -18,8 +18,9 @@ const EXPECT = {
   geckoId: 'firefox-computeruse@local',
   permissions: ['scripting', 'storage', 'tabs', 'webNavigation', 'webRequest', 'webRequestBlocking'],
   hostPermissions: ['<all_urls>'],
-  // Total bytes in dist/. The extension is ~93 kB today; the budget leaves room to grow, not to double.
-  maxBytes: 120_000,
+  // Total bytes in dist/. ~123 kB with the prompt-injection defenses and Bitwarden logins (sign-in field finder,
+  // redaction); the budget leaves room to grow, not to double.
+  maxBytes: 130_000,
 };
 // Strings that only exist in the test-only code paths of entrypoints/background.ts (tree-shaken from release builds).
 const TEST_HOOK_MARKERS = ['/e2e/next', 'sidepanel.html?tabUrl='];

@@ -2,6 +2,7 @@
 // screenshots. Firefox WebExtension APIs only (no CDP).
 
 import type { ProbeCmd, ProbeResult, Risk, Snapshot } from '../protocol';
+import { createRedactor } from '../redact';
 
 declare const browser: any;
 
@@ -38,6 +39,10 @@ export interface Host {
   switchTab(n: number): Promise<string>;
   closeTab(): Promise<string>;
   screenshot(marks: boolean): Promise<string | null>;
+  /** Frame aliases from the last observe (for finding a sign-in form in a frame). */
+  frameAliases?(): number[];
+  /** Values filled from the password manager: scrubbed from all text this host returns from now on. */
+  redact?(values: { username?: string; password?: string; totp?: string }): void;
 }
 
 const RESTRICTED = /^(about:|moz-extension:|chrome:|resource:|view-source:|data:|blob:|file:|jar:)|^https:\/\/(addons\.mozilla\.org|accounts-static\.cdn\.mozilla\.net|support\.mozilla\.org)\//;
@@ -78,6 +83,7 @@ async function waitComplete(tabId: number, maxMs: number): Promise<void> {
 
 export function createHost(initialTabId: number, windowId: number): Host {
   let tabId = initialTabId;
+  const secrets = createRedactor();
   // Tabs the agent knows, numbered in the order it met them, so numbers stay stable for the model.
   const order: number[] = [initialTabId];
   // Firefox frame ids are large numbers (17179869185); the model sees small per-tab aliases (1, 2, …) instead.
@@ -93,10 +99,12 @@ export function createHost(initialTabId: number, windowId: number): Host {
     return a;
   };
   const parseRef = (ref: string): { frameId: number; id: number } => {
-    const m = /^(?:(\d+):)?(\d+)$/.exec(ref);
-    if (!m) return { frameId: 0, id: -1 };
-    if (!m[1]) return { frameId: 0, id: Number(m[2]) };
-    return { frameId: frameOf.get(Number(m[1])) ?? -1, id: Number(m[2]) };
+    // "3:" (internal, never from the model) means frame 3 as a whole.
+    const m = /^(?:(\d+):)?(\d*)$/.exec(ref);
+    if (!m || (!m[1] && !m[2])) return { frameId: 0, id: -1 };
+    const id = m[2] ? Number(m[2]) : -1;
+    if (!m[1]) return { frameId: 0, id };
+    return { frameId: frameOf.get(Number(m[1])) ?? -1, id };
   };
 
   const inject = async () => {
@@ -122,6 +130,16 @@ export function createHost(initialTabId: number, windowId: number): Host {
   const host: Host = {
     get tabId() {
       return tabId;
+    },
+
+    frameAliases() {
+      return [...frameOf.keys()];
+    },
+
+    redact(v) {
+      secrets.add(v.username, true);
+      secrets.add(v.password);
+      secrets.add(v.totp);
     },
 
     async observe(budget) {
@@ -216,7 +234,7 @@ export function createHost(initialTabId: number, windowId: number): Host {
       } catch {
         top = undefined;
       }
-      const c = ref ? { ...cmd, id, gate, top } : { ...cmd, gate, top };
+      const c = ref && id >= 0 ? { ...cmd, id, gate, top } : { ...cmd, gate, top };
       try {
         const r = (await run(frameId, c)) as ProbeResult | undefined;
         if (r && !r.ok && frameId) r.error = r.error.replace(/\b\d{6,}:/g, `${aliasOf.get(frameId)}:`);
@@ -318,7 +336,25 @@ export function createHost(initialTabId: number, windowId: number): Host {
       }
     },
   };
+  // Everything the host hands back goes through the redactor (a no-op until a password-manager fill).
+  for (const k of ['observe', 'act', 'settle', 'navigate', 'back', 'tabs', 'newTab', 'switchTab', 'closeTab'] as const) {
+    const f = (host[k] as (...a: unknown[]) => Promise<unknown>).bind(host);
+    (host as unknown as Record<string, unknown>)[k] = async (...a: unknown[]) => scrubDeep(secrets, await f(...a));
+  }
   return host;
+}
+
+/** Scrubs secrets from strings, and from the string fields of results, observations and tab lists. */
+function scrubDeep<T>(r: ReturnType<typeof createRedactor>, v: T): T {
+  if (!r.size || v == null) return v;
+  if (typeof v === 'string') return r.scrub(v) as T;
+  if (Array.isArray(v)) return v.map(x => scrubDeep(r, x)) as T;
+  if (typeof v === 'object') {
+    const o: Record<string, unknown> = { ...(v as Record<string, unknown>) };
+    for (const [k, x] of Object.entries(o)) if (typeof x === 'string' || (x && typeof x === 'object')) o[k] = scrubDeep(r, x);
+    return o as T;
+  }
+  return v;
 }
 
 /** Shrinks a screenshot to `maxW` pixels wide JPEG (vision models gain little above ~1k px and pay per pixel). */

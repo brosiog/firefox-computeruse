@@ -97,13 +97,16 @@
           <label>bw serve URL <input name="vaultUrl" placeholder="http://localhost:8087" /></label>
           <label class="check"><input name="vaultAsk" type="checkbox" /> Ask me before each sign-in</label>
           <label class="check"><input name="vaultAgents" type="checkbox" /> Coding agents on the bridge may use logins too</label>
+          <div class="vault-status"><span id="vaultDot" class="dot"></span><span id="vaultOut">Not checked yet</span></div>
           <div class="row">
-            <button type="button" id="vaultCheck">Check</button>
             <input id="vaultPw" type="password" autocomplete="off" placeholder="Master password" aria-label="Bitwarden master password" />
             <button type="button" id="vaultUnlock">Unlock</button>
-            <button type="button" id="vaultLock">Lock</button>
           </div>
-          <p class="hint" id="vaultOut"></p>
+          <div class="row">
+            <button type="button" id="vaultCheck">Check status</button>
+            <button type="button" id="vaultLock">Lock vault</button>
+          </div>
+          <p class="hint">The master password goes only to bw serve on this computer. It is never stored.</p>
         </fieldset>
         <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
         <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>

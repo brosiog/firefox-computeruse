@@ -104,7 +104,14 @@ input, select { font: inherit; color: var(--fg); background: var(--card); border
 .actions { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .spacer { flex: 1; }
 
-fieldset.vault { border: 1px solid var(--line, #8884); border-radius: 6px; padding: 6px 10px; margin: 8px 0; }
+fieldset.vault { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 8px; margin: 10px 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 fieldset.vault legend { font-weight: 600; padding: 0 4px; }
-fieldset.vault .row { display: flex; gap: 6px; align-items: center; }
-fieldset.vault #vaultPw { flex: 1; min-width: 0; }
+fieldset.vault .hint { margin: 0; }
+fieldset.vault .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+fieldset.vault #vaultPw { flex: 1 1 140px; min-width: 0; }
+.vault-status { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; background: var(--chip); font-size: 12px; overflow-wrap: anywhere; }
+.vault-status .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.vault-status .dot.ok { background: var(--ok); }
+.vault-status .dot.warn { background: var(--accent); }
+.vault-status .dot.bad { background: var(--err); }
+.card .warn { margin-top: 6px; padding: 6px 8px; border-radius: 6px; border-left: 3px solid var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); color: var(--fg); font-size: 12px; }

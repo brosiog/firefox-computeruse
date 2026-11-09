@@ -26,6 +26,9 @@ export interface VaultLogin {
   /** e.g. `j•••@gmail.com`, so the agent (and the approval card) can tell accounts apart. */
   hint: string;
   hasTotp: boolean;
+  /** Whether `q` is this login's username, exactly (case-insensitive). Lets a task name the account without the
+   *  agent ever being shown it. Not enumerable: never serialized. */
+  readonly isUser?: (q: string) => boolean;
 }
 
 /** What gets filled into the page. Lives only between the vault fetch and the fill. */
@@ -33,6 +36,8 @@ export interface VaultSecret {
   username: string;
   password: string;
   totp?: string;
+  /** Set when a code was wanted and Bitwarden could not produce one. */
+  totpError?: string;
 }
 
 export interface Vault {
@@ -57,7 +62,7 @@ export function createVault(baseUrl: string, fetchImpl: Fetch = (...a) => fetch(
     try {
       r = await fetchImpl(`${base}${path}`, { ...init, signal: AbortSignal.timeout(15000) });
     } catch {
-      throw new VaultError(`Bitwarden is not reachable at ${base}. The user needs to run \`bw serve\`.`);
+      throw new VaultError(`Bitwarden is not reachable at ${base}. The user needs to run bw serve.`);
     }
     let body: any;
     try {
@@ -92,7 +97,12 @@ export function createVault(baseUrl: string, fetchImpl: Fetch = (...a) => fetch(
       // The list carries whole decrypted items, passwords included: keep only what the agent may see.
       return items
         .filter(i => i?.type === 1 && !i.deletedDate && i.login && itemMatches(i, pageUrl))
-        .map(i => ({ id: String(i.id), name: String(i.name ?? 'login'), hint: maskUsername(i.login.username), hasTotp: !!i.login.totp }));
+        .map(i => {
+          const user = typeof i.login.username === 'string' ? i.login.username.trim().toLowerCase() : '';
+          const l: VaultLogin = { id: String(i.id), name: cleanName(i.name), hint: maskUsername(i.login.username), hasTotp: !!i.login.totp };
+          Object.defineProperty(l, 'isUser', { value: (q: string) => !!user && q.trim().toLowerCase() === user, enumerable: false });
+          return l;
+        });
     },
 
     async secret(id, pageUrl, withTotp) {
@@ -102,8 +112,9 @@ export function createVault(baseUrl: string, fetchImpl: Fetch = (...a) => fetch(
       if (!itemMatches(item, pageUrl)) throw new VaultError(`that Bitwarden login is not saved for ${hostOf(pageUrl)}`);
       const s: VaultSecret = { username: String(item.login.username ?? ''), password: String(item.login.password ?? '') };
       if (withTotp && item.login.totp) {
-        const t = await call(`/object/totp/${id}`).catch(() => null);
-        if (typeof t?.data === 'string') s.totp = t.data;
+        const t = await call(`/object/totp/${id}`).catch((e: Error) => ({ error: e.message }));
+        if (typeof t?.data === 'string' && /^\d{4,10}$/.test(t.data)) s.totp = t.data;
+        else s.totpError = `Bitwarden could not produce a one-time code for this login${t?.error ? ` (${t.error})` : ''}`;
       }
       return s;
     },
@@ -158,7 +169,7 @@ export function sameSite(savedUri: string, pageUrl: string): boolean {
 function itemMatches(item: any, pageUrl: string): boolean {
   const uris: any[] = Array.isArray(item?.login?.uris) ? item.login.uris : [];
   // match 5 is Bitwarden's "Never".
-  return uris.some(u => typeof u?.uri === 'string' && u.match !== 5 && sameSite(u.uri, pageUrl));
+  return uris.some(u => !!u && typeof u === 'object' && typeof u.uri === 'string' && u.match !== 5 && sameSite(u.uri, pageUrl));
 }
 
 const isIp = (h: string) => /^\d+\.\d+\.\d+\.\d+$/.test(h) || h.includes(':') || h.startsWith('[');
@@ -187,6 +198,13 @@ export function hostOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+/** Item names are the user's, but they reach the agent: one line, at most 60 characters. */
+export function cleanName(n: unknown): string {
+  const s = String(n ?? '').replace(/\s+/g, ' ').trim();
+  if (!s) return 'login';
+  return s.length > 60 ? `${s.slice(0, 59)}…` : s;
 }
 
 /** `jane.doe@gmail.com` → `j•••@gmail.com`; `janedoe` → `j•••`; empty → `(no username)`. */

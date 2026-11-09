@@ -29,6 +29,8 @@ export interface Gate {
   risk: Risk;
   /** Human-readable description of what would happen, e.g. `button "Place order"`. */
   what: string;
+  /** Something the user should notice before allowing it (shown highlighted on the card). */
+  warn?: string;
 }
 
 export interface ProbeOk {

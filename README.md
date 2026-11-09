@@ -154,23 +154,44 @@ through it. That is how the Bitwarden CLI works, so lock it, or stop `bw serve`,
 
 On a sign-in page the agent sends `{"tool":"login","enter":true}`:
 
-1. The probe finds the sign-in fields: username and password, a username-first page, or a one-time-code page (one box or
-   one box per digit). It refuses sign-up and change-password forms.
-2. Bitwarden lists the logins saved for **that frame's own URL**, not the tab's. The extension checks each match again:
+1. **Find the fields.** The probe finds the sign-in fields: username and password, a username-first page, or a
+   one-time-code page (one box or one box per digit). Without a ref it tries the page, then every frame, and gives a
+   page that's still rendering a moment. It is picky on purpose. It won't fill:
+   - sign-up and change-password forms;
+   - contact, newsletter and checkout forms;
+   - card and CVC fields, or a field too short for the saved value (a PIN);
+   - codes sent by SMS or email, or recovery codes;
+   - a form that posts to another site.
+
+   Hidden decoy fields (honeypots) are skipped, and a GET form isn't auto-submitted, since that would put the password
+   in the URL.
+2. **Match the site.** Bitwarden lists the logins saved for **that frame's own URL**, not the tab's. The extension checks
+   each match again:
    - same host, or same registrable domain;
    - never `http` for a login saved for `https`;
    - no shared hosting suffixes like `github.io`.
-3. The agent sees only item names and masked usernames (`j•••@gmail.com`), so it can pick among several accounts.
-4. You approve the sign-in in the sidebar (*Ask me before each sign-in*, on by default).
-5. The credentials go from `bw serve` straight into the fill command. The probe fills only if the frame is still on the
-   same origin, then marks the filled fields secret, so later page states show the username as `•••` too. The agent
-   receives only "filled the username and password from Bitwarden login "GitHub"".
+3. **Pick an account.** The agent sees only item names and masked usernames (`j•••@gmail.com`). With several accounts it
+   picks by number, by name, or by the full username its task gave. That last one is matched inside the vault, so the
+   agent is never shown it.
+4. **Approve.** You approve the sign-in in the sidebar (*Ask me before each sign-in*, on by default). If the form sits in
+   a frame on another site's page, the card says so.
+5. **Fill.**
+   - The credentials go from `bw serve` straight into the fill command.
+   - The probe fills only if the frame is still on the same origin.
+   - Each field is checked after filling, and filled again if the page swapped it out.
+   - Filled fields are marked secret, and the values are scrubbed from everything the agent receives afterwards: page
+     text, titles, URLs and results. So "Welcome, jane@example.com" reaches the agent as "Welcome, •••".
 
 Coding agents on the bridge get the `login` action only if you also tick *Coding agents on the bridge may use logins
 too*. The same applies to tasks they delegate.
 
+`pnpm e2e:login` runs the login lab: about 165 sign-in situations, from ordinary to hostile and broken. They run in
+real Firefox through the bridge, with a fake `bw serve` and many hostnames. `pnpm test` runs the ones that don't need a
+browser on happy-dom. The cases are in [e2e/login-lab/cases.mjs](e2e/login-lab/cases.mjs).
+
 Limits:
-- A site can still show your username on its own pages ("Signed in as …"), and the agent reads page text.
+- Values shorter than 4 characters aren't scrubbed from page text, because they would blank ordinary words.
+- Longer usernames that are also common words ("admin") are scrubbed wherever they appear.
 - With vision on, a screenshot shows the filled username. Passwords are always dots.
 - TOTP codes need an authenticator key saved in the item.
 - Passkeys and the Bitwarden desktop app or browser extension aren't used: the CLI keeps its own session.

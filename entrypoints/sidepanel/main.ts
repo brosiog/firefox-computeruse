@@ -160,14 +160,6 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       setTimeout(() => resolve(yes), 100);
       return;
     }
-    // e2e:bridge build only (compiled out of dist/): the fixture server answers the card, as a person would.
-    const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
-    if (bridgeTest) {
-      fetch(`${bridgeTest}/e2e/approve?risk=${gate.risk}`)
-        .then(r => r.text())
-        .then(t => resolve(t === 'yes'), () => resolve(false));
-      return;
-    }
     const card = el('div', 'card');
     const label: Record<string, string> = {
       write: 'The agent wants to submit or send something',
@@ -179,6 +171,7 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       login: 'The agent wants to sign in with your Bitwarden login',
     };
     card.append(el('strong', '', label[gate.risk] ?? 'Approval needed'), el('div', 'hint', gate.what));
+    if (gate.warn) card.append(el('div', 'warn', gate.warn));
     if (a.text && gate.risk !== 'secret') card.append(el('div', 'hint', `text: ${a.text.slice(0, 200)}`));
     const row = el('div', 'row');
     const yes = el('button', 'primary', 'Allow once');
@@ -194,6 +187,14 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
     yes.onclick = () => done(true);
     no.onclick = () => done(false);
     running?.signal.addEventListener('abort', () => done(false), { once: true });
+    // e2e:bridge build only (compiled out of dist/): the card is shown as usual, and the fixture server answers it, as
+    // a person would.
+    const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
+    if (bridgeTest) {
+      fetch(`${bridgeTest}/e2e/approve?risk=${gate.risk}&what=${encodeURIComponent(gate.what)}`)
+        .then(r => r.text())
+        .then(t => row.isConnected && done(t === 'yes'), () => row.isConnected && done(false));
+    }
   });
 }
 
@@ -416,15 +417,19 @@ $('test').onclick = async () => {
 const vaultOut = $('vaultOut');
 const vaultPw = $<HTMLInputElement>('vaultPw');
 const vaultNow = () => createVault(read().vaultUrl.trim() || DEFAULTS.vaultUrl);
-const STATE_TEXT: Record<string, string> = {
-  unlocked: 'unlocked',
-  locked: 'locked: enter the master password and Unlock, or run `bw unlock` before `bw serve`',
-  unauthenticated: 'not logged in: run `bw login` first',
+const STATE_TEXT: Record<string, [string, string]> = {
+  unlocked: ['Unlocked: the agent can sign in with your logins', 'ok'],
+  locked: ['Locked: enter your master password and press Unlock, or run bw unlock before bw serve', 'warn'],
+  unauthenticated: ['Not logged in: run bw login on this computer first', 'bad'],
 };
 async function showVault(p: Promise<{ state: string; email?: string; error?: string }>) {
-  vaultOut.textContent = 'checking…';
+  const dot = $('vaultDot');
+  vaultOut.textContent = 'Checking…';
+  dot.className = 'dot';
   const st = await p;
-  vaultOut.textContent = st.state === 'unreachable' ? (st.error ?? 'unreachable') : `${st.email ? `${st.email}: ` : ''}${STATE_TEXT[st.state] ?? st.state}${st.error ? ` (${st.error})` : ''}`;
+  const [text, cls] = st.state === 'unreachable' ? [st.error ?? 'bw serve is not reachable', 'bad'] : (STATE_TEXT[st.state] ?? [st.state, '']);
+  vaultOut.textContent = `${text}${st.email ? ` · ${st.email}` : ''}${st.error && st.state !== 'unreachable' ? ` (${st.error})` : ''}`;
+  dot.className = `dot ${cls}`;
 }
 $('vaultCheck').onclick = () => void showVault(vaultNow().status());
 $('vaultUnlock').onclick = () => {
@@ -446,7 +451,8 @@ $('vaultLock').onclick = () => {
 function openSettings() {
   fill(settings);
   $('testOut').textContent = '';
-  vaultOut.textContent = '';
+  vaultOut.textContent = settings.vault ? 'Checking…' : 'Off';
+  $('vaultDot').className = 'dot';
   vaultPw.value = '';
   dlg.showModal();
   if (settings.vault) void showVault(vaultNow().status());
@@ -476,7 +482,10 @@ const bridgeHandle = createBridgeHandler({
 });
 let bridge: { url: string; stop: () => void } | null = null;
 function connectBridge() {
-  const url = e2eUrl ? '' : settings.bridgeUrl.trim();
+  // e2e:bridge builds: Firefox also opens the real sidebar at install; only the panel tab under test may take agent
+  // commands, or the hub would split them between two panels.
+  const testSidebar = !!import.meta.env.WXT_BRIDGE_TEST && !new URLSearchParams(location.search).get('tabUrl');
+  const url = e2eUrl || testSidebar ? '' : settings.bridgeUrl.trim();
   if (bridge?.url === url) return;
   bridge?.stop();
   bridge = url ? { url, stop: startBridge(url, bridgeHandle, up => ($('agents').hidden = !up)) } : null;
