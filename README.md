@@ -24,7 +24,28 @@ pnpm build          # → dist/
 Toggle the sidebar with the toolbar button or **Ctrl+Shift+A** (Alt+Shift+A on Linux/Windows). If Firefox hasn't granted
 website access, the sidebar shows an *Allow on all sites* button.
 
-## Model servers
+## Working across tabs
+
+The agent always works in the tab you're on. A **This tab** chip above the task box shows which one, and it follows you
+when you switch tabs. To give it more tabs, type **@** in the task box (or click the **@** button) and attach other
+open tabs, from any window. Keep
+typing to filter by title or address. ↑/↓ and Enter (or a click) pick a tab, and Esc closes the list. Each attached tab
+shows as a chip above the box, and × removes it. You can attach up to 6 tabs. For example: *"Is the hub on @shop-a.com
+cheaper than this one? Check @reviews.example too."*
+
+When the task starts, the agent reads each attached tab's text once, without switching to it, and gets it along with
+the task. So it can compare, collect or cross-check across tabs from its first step, and it uses `tab_switch` to act in
+one of them. Notes:
+
+- The text comes from the same reader as the `read` tool, without refs (refs belong to the page in front of the agent).
+  It is fenced and marked as page data like every other page text.
+- Links on an attached tab count as seen for navigation provenance.
+- The text sits in the fixed opening of every request, so it is prefilled once per run, not on every step, and it does
+  not count against the history budget.
+- The budget is shared across tabs: about four page budgets in total (20k characters by default), at most two per tab,
+  and less on small context windows.
+- Tabs Firefox has unloaded are reloaded first. Pages extensions cannot read (`about:`, AMO) are left out of the list.
+
 
 | Preset | API | Notes |
 | --- | --- | --- |
