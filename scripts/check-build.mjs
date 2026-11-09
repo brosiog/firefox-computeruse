@@ -21,8 +21,9 @@ const EXPECT = {
   // Total bytes in dist/. The extension is ~93 kB today; the budget leaves room to grow, not to double.
   maxBytes: 120_000,
 };
-// Strings that only exist in the test-only code paths of entrypoints/background.ts (tree-shaken from release builds).
-const TEST_HOOK_MARKERS = ['/e2e/next', 'sidepanel.html?tabUrl='];
+// Strings that only exist in test-only code paths (tree-shaken from release builds): the background job loop, the
+// sidebar's e2e/bench harness, and the step traces the bench records.
+const TEST_HOOK_MARKERS = ['/e2e/next', 'sidepanel.html?tabUrl=', '/e2e/report', '/e2e/approve', 'promptChars'];
 
 const errors = [];
 const fail = msg => errors.push(msg);

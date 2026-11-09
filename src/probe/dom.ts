@@ -1,6 +1,7 @@
 // DOM semantics for the probe: roles, accessible names, state, visibility. Pure functions over the live DOM.
 
-export const testLayout = () => (globalThis as { __fcuTestLayout?: boolean }).__fcuTestLayout === true;
+/** happy-dom has no layout; unit tests (vitest, MODE 'test') opt into fallbacks. Release builds compile them out. */
+export const testLayout = () => import.meta.env.MODE === 'test' && (globalThis as { __fcuTestLayout?: boolean }).__fcuTestLayout === true;
 
 export const SKIP_TAGS = new Set([
   'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'META', 'LINK', 'BASE', 'TITLE', 'OBJECT', 'EMBED', 'PARAM',

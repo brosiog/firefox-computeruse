@@ -72,7 +72,8 @@ let cur: { root: HTMLElement; think: HTMLElement; act: HTMLElement; res: HTMLEle
 function onEvent(e: AgentEvent) {
   switch (e.type) {
     case 'trace':
-      if (e2eUrl) e2eTraces.push(e.step);
+      // Only test builds emit traces (see runAgent).
+      e2eTraces.push(e.step);
       break;
     case 'step': {
       const root = el('div', 'step');
@@ -138,8 +139,10 @@ function onEvent(e: AgentEvent) {
   }
 }
 
-const e2eParams = new URLSearchParams(location.search);
-const e2eUrl = e2eParams.get('e2e');
+const e2eParams = new URLSearchParams(import.meta.env.WXT_E2E_URL ? location.search : '');
+// Test builds only (WXT_E2E_URL set at build time, as for e2e and bench): in dist/ this is null, and every branch that
+// checks it is compiled out with it.
+const e2eUrl = import.meta.env.WXT_E2E_URL ? e2eParams.get('e2e') : null;
 let e2eApprovals = 0;
 let e2eDeclines = 0;
 let e2eSecurityDeclines = 0;
@@ -171,15 +174,16 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
     }
     const card = el('div', 'card');
     const label: Record<string, string> = {
-      act: 'The agent wants to act on the page',
-      write: 'The agent wants to submit or send something',
-      delete: 'The agent wants to delete something',
-      pay: 'The agent wants to make a payment or purchase',
-      secret: 'The agent wants to type into a password or payment field',
-      exfil: 'The agent wants to send a form to a different website',
-      suspicious: 'The agent wants to act on page text that addresses AI agents (possible prompt injection)',
+      act: 'act on the page',
+      write: 'submit or send something',
+      delete: 'delete something',
+      pay: 'make a payment or purchase',
+      secret: 'type into a password or payment field',
+      exfil: 'send a form to a different website',
+      suspicious: 'act on page text that addresses AI agents (possible prompt injection)',
     };
-    card.append(el('strong', '', label[gate.risk] ?? 'Approval needed'), el('div', 'hint', gate.what));
+    const want = label[gate.risk];
+    card.append(el('strong', '', want ? `The agent wants to ${want}` : 'Approval needed'), el('div', 'hint', gate.what));
     if (a.text && gate.risk !== 'secret') card.append(el('div', 'hint', `text: ${a.text.slice(0, 200)}`));
     const row = el('div', 'row');
     const yes = el('button', 'primary', 'Allow once');
@@ -223,8 +227,9 @@ function ask(q: string): Promise<string | null> {
 
 async function targetTab(): Promise<{ tabId: number; windowId: number }> {
   const params = new URLSearchParams(location.search);
-  // Test hook: a sidebar page opened as a tab (e2e) drives the first tab whose URL starts with `tabUrl`.
-  if (params.get('tabUrl')) {
+  // Test hook (e2e, bench and e2e:bridge builds only; compiled out of dist/): a sidebar page opened as a tab drives the
+  // first tab whose URL starts with `tabUrl`.
+  if ((import.meta.env.WXT_E2E_URL || import.meta.env.WXT_BRIDGE_TEST) && params.get('tabUrl')) {
     const all = await browser.tabs.query({});
     const t = all.find((x: any) => x.url?.startsWith(params.get('tabUrl')!));
     if (t) return { tabId: t.id, windowId: t.windowId };
