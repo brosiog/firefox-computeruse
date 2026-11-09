@@ -24,7 +24,28 @@ pnpm build          # → dist/
 Toggle the sidebar with the toolbar button or **Ctrl+Shift+A** (Alt+Shift+A on Linux/Windows). If Firefox hasn't granted
 website access, the sidebar shows an *Allow on all sites* button.
 
-## Model servers
+## Working across tabs
+
+The agent always works in the tab you're on. A **This tab** chip above the task box shows which one, and it follows you
+when you switch tabs. To give it more tabs, type **@** in the task box (or click the **@** button) and attach other
+open tabs, from any window. Keep
+typing to filter by title or address. ↑/↓ and Enter (or a click) pick a tab, and Esc closes the list. Each attached tab
+shows as a chip above the box, and × removes it. You can attach up to 6 tabs. For example: *"Is the hub on @shop-a.com
+cheaper than this one? Check @reviews.example too."*
+
+When the task starts, the agent reads each attached tab's text once, without switching to it, and gets it along with
+the task. So it can compare, collect or cross-check across tabs from its first step, and it uses `tab_switch` to act in
+one of them. Notes:
+
+- The text comes from the same reader as the `read` tool, without refs (refs belong to the page in front of the agent).
+  It is fenced and marked as page data like every other page text.
+- Links on an attached tab count as seen for navigation provenance.
+- The text sits in the fixed opening of every request, so it is prefilled once per run, not on every step, and it does
+  not count against the history budget.
+- The budget is shared across tabs: about four page budgets in total (20k characters by default), at most two per tab,
+  and less on small context windows.
+- Tabs Firefox has unloaded are reloaded first. Pages extensions cannot read (`about:`, AMO) are left out of the list.
+
 
 | Preset | API | Notes |
 | --- | --- | --- |
@@ -34,6 +55,7 @@ website access, the sidebar shows an *Allow on all sites* button.
 | MLX (`mlx_lm.server`) | `http://localhost:8080/v1` | |
 | Ollama | native `/api/chat`, `http://localhost:11434` | Sends `num_ctx`, `keep_alive` and `think`. No `OLLAMA_ORIGINS` setup needed (see below). |
 | Other | any `/v1/chat/completions` | Optional API key; models are listed from `/models`. |
+| **ChatGPT plan** | Responses API, `https://api.openai.com/v1` | *Continue with ChatGPT* in Settings; runs on your ChatGPT subscription. See below. |
 
 The client tries optional features and drops each one the server rejects, remembering the result per server and model:
 
@@ -49,6 +71,31 @@ Two Firefox issues are fixed for LAN servers:
   `http://192.168.x.x` to `https://` and breaks every plain-HTTP server that isn't on localhost. The manifest overrides it.
 - Ollama rejects `moz-extension://` origins. The background page removes the `Origin` header, but only on the
   extension's own requests to the configured model server.
+
+## ChatGPT plan (Sign in with ChatGPT)
+
+Pick **ChatGPT plan** in Settings and choose *Continue with ChatGPT*. A tab opens on OpenAI's sign-in. After you
+approve, the extension lists the models your plan offers and the agent runs on your ChatGPT subscription. This is
+OpenAI's [open-source token-sharing flow](https://developers.openai.com/siwc/token-sharing-open-source) against the
+public Responses API, not ChatGPT's private backend.
+
+- **Redirect.** The flow redirects to `http://127.0.0.1:<port>/auth/callback`. The extension doesn't listen on that
+  port. The background page sees the sign-in tab navigate there (`webRequest`), takes the code, cancels the request and
+  closes the tab.
+- **Checks.** Sign-in uses PKCE, `state` and `nonce`. The ID token's signature is checked against OpenAI's JWKS, along
+  with its issuer, audience and expiry. Sign-in fails unless the `chatgpt.tokens.use.direct` scope is granted.
+- **Tokens.** Tokens stay in `storage.local` under `chatgptAuth`, separate from settings. They are refreshed in the
+  background page only, so several sidebars never race a rotating refresh token. *Sign out* revokes the refresh token.
+- **Requests.** Every request sends `store: false` and `stream: true`, and the system prompt goes in `instructions`.
+  `temperature` and output caps aren't accepted on this route. Reasoning effort and structured output are still tried
+  and dropped when the model rejects them.
+- **No prewarm.** There's nothing to load, and the route can't cap a reply at one token.
+- **Your data.** Page text, and screenshots when vision is on, go to OpenAI and count against your plan's usage.
+
+**Claude subscriptions.** Anthropic doesn't allow third-party apps to sign in with a Claude.ai account or use its plan
+limits. That includes apps built on the Claude Agent SDK, which needs an API key. To use a Claude plan with this
+browser, drive it from Claude Code itself through the [agent bridge](#coding-agents-mcp-and-cli). The browser
+becomes a tool of Claude Code, which runs under your own login.
 
 ## What makes it efficient for small models
 
@@ -98,14 +145,109 @@ Firefox has no `chrome.debugger`/CDP, so this replaces Nanobrowser's whole contr
   page keys, Space and Enter activation. `target=_blank` links are opened by the extension (the popup blocker would stop
   them otherwise). Every action dispatches at most once.
 - **Frames.** Frames are spliced in where their `<iframe>` sits, with short aliases (`[1:4]`), including cross-origin ones.
-- **Approvals.** Gating is decided in the page before dispatch:
-  - Ask mode (the default) asks before submit, send and delete actions.
-  - Payments and passwords ask in both modes.
-  - Search forms, consent banners and plain navigation links never ask.
+- **Approvals.** Gating is decided in the page before dispatch. *Settings → Approvals* has four levels:
+  - **Every action** asks before each click, typing, dropdown choice, key press, navigation and tab change. Reading,
+    finding, scrolling, hovering and screenshots don't ask. Declining one action declines only that action.
+  - **Ask** (the default) asks before submits, sends and deletes, and before payments and passwords.
+  - **Auto** asks only before payments and passwords.
+  - **Full auto** never asks, and the agent runs on its own. A red *full auto* pill shows in the header while it is on.
+  - Cross-site form submissions and actions on page text aimed at AI agents (likely prompt injection) ask at every
+    level; in Full auto they are refused without asking, and the agent carries on with the task.
+  - Below Every action, search forms, consent banners and plain navigation links never ask.
 - **Page text is data.** Page text reaches the model inside `<page>…</page>`, and the system prompt says it is data, not
-  instructions.
+  instructions. See [Prompt-injection defenses](#prompt-injection-defenses).
 - **Vision (optional).** For vision models there is a `screenshot` tool that draws refs on the page (set-of-marks),
   downscaled to 1024 px JPEG. Splash reports `vision: true` for Qwen3.8; turn it on in Settings to use it.
+
+## Prompt-injection defenses
+
+A prompt alone does not stop a small model from following instructions written on a web page. So, following the
+"constrain actions after untrusted input" design pattern (Beurer-Kellner et al., 2025), the defenses here are
+deterministic checks in the probe and the agent loop. None of them costs a model call.
+
+- **Boundary integrity.** Everything the page controls (text, title, tab titles, dialog labels) sits inside `<page>…</page>`.
+  Page text that tries to close the fence (`</page>`) is neutralized.
+- **Hidden text is dropped.** Text a person can't see never reaches the model: tiny fonts, clipped or off-screen boxes,
+  text the same colour as its background, `opacity` near 0, and HTML comments.
+- **Injection detector.** Lines written to AI agents ("note for AI assistants", "ignore your previous instructions",
+  fake `SYSTEM:` and chat-template tokens, several languages) are marked `⚠`. The page header then says how many there are
+  and that they are not from the user. The detector also tests accessible names, so an instruction hidden in an
+  `aria-label` is caught.
+- **Taint and approval.** Controls that belong to an injected block (its links, an injected dialog's buttons) need the
+  user's approval at every approval level (Full auto refuses them instead of asking). Closing a dialog never does. The taint stays local: it spreads to a container only when
+  the injection is nearly all of that container, so a page's own Save or Next button is never caught.
+- **Navigation provenance.** The agent can only type a URL that a page offered as a link, that is on the same site, or
+  that the user named in the task. A URL carrying data to a third party is blocked with an explanation.
+- **Cross-site actions need approval.** A form that submits to another site (`exfil`), and a link inside a frame from
+  another site (ads, "sponsored" boxes), ask first. Frames from another site are labelled as such in the page text.
+- **Planted answers.** A final answer that repeats a code-like token taken from page text telling the agent what to
+  answer is sent back once. A confirmation number the page simply shows is not affected.
+- **Declines are not dead ends.** When the user (or the bench) declines one of these requests, the agent is told it came
+  from the page and continues the user's task.
+
+Benchmark and results: [bench/README.md](bench/README.md#security-prompt-injection).
+
+## Bitwarden logins (opt-in)
+
+The agent can sign in with your saved Bitwarden logins without seeing them. It never gets the username, password or
+one-time code. Turn it on in *Settings → Bitwarden logins*. It is off by default.
+
+It uses the Bitwarden CLI's local API, so the CLI must be logged in and unlocked:
+
+```sh
+bw login                                   # once
+export BW_SESSION="$(bw unlock --raw)"     # or start locked, then use Unlock in Settings
+bw serve                                   # http://localhost:8087
+```
+
+The settings panel shows the vault's state and can unlock and lock it. The master password goes only to `bw serve` on
+this computer and is never stored. Note that while `bw serve` runs unlocked, any local process can read the vault
+through it. That is how the Bitwarden CLI works, so lock it, or stop `bw serve`, when you're done.
+
+On a sign-in page the agent sends `{"tool":"login","enter":true}`:
+
+1. **Find the fields.** The probe finds the sign-in fields: username and password, a username-first page, or a
+   one-time-code page (one box or one box per digit). Without a ref it tries the page, then every frame, and gives a
+   page that's still rendering a moment. It is picky on purpose. It won't fill:
+   - sign-up and change-password forms;
+   - contact, newsletter and checkout forms;
+   - card and CVC fields, or a field too short for the saved value (a PIN);
+   - codes sent by SMS or email, or recovery codes;
+   - a form that posts to another site.
+
+   Hidden decoy fields (honeypots) are skipped, and a GET form isn't auto-submitted, since that would put the password
+   in the URL.
+2. **Match the site.** Bitwarden lists the logins saved for **that frame's own URL**, not the tab's. The extension checks
+   each match again:
+   - same host, or same registrable domain;
+   - never `http` for a login saved for `https`;
+   - no shared hosting suffixes like `github.io`.
+3. **Pick an account.** The agent sees only item names and masked usernames (`j•••@gmail.com`). With several accounts it
+   picks by number, by name, or by the full username its task gave. That last one is matched inside the vault, so the
+   agent is never shown it.
+4. **Approve.** You approve the sign-in in the sidebar (*Ask me before each sign-in*, on by default). If the form sits in
+   a frame on another site's page, the card says so. The *Every action* approval level always asks here, and *Full
+   auto* never does; the site check in step 5 applies either way.
+5. **Fill.**
+   - The credentials go from `bw serve` straight into the fill command.
+   - The probe fills only if the frame is still on the same origin.
+   - Each field is checked after filling, and filled again if the page swapped it out.
+   - Filled fields are marked secret, and the values are scrubbed from everything the agent receives afterwards: page
+     text, titles, URLs and results. So "Welcome, jane@example.com" reaches the agent as "Welcome, •••".
+
+Coding agents on the bridge get the `login` action only if you also tick *Coding agents on the bridge may use logins
+too*. The same applies to tasks they delegate.
+
+`pnpm e2e:login` runs the login lab: about 165 sign-in situations, from ordinary to hostile and broken. They run in
+real Firefox through the bridge, with a fake `bw serve` and many hostnames. `pnpm test` runs the ones that don't need a
+browser on happy-dom. The cases are in [e2e/login-lab/cases.mjs](e2e/login-lab/cases.mjs).
+
+Limits:
+- Values shorter than 4 characters aren't scrubbed from page text, because they would blank ordinary words.
+- Longer usernames that are also common words ("admin") are scrubbed wherever they appear.
+- With vision on, a screenshot shows the filled username. Passwords are always dots.
+- TOTP codes need an authenticator key saved in the item.
+- Passkeys and the Bitwarden desktop app or browser extension aren't used: the CLI keeps its own session.
 
 ## Coding agents (MCP and CLI)
 
@@ -119,8 +261,9 @@ long-polls it on `127.0.0.1:47823`; set this in *Settings → Agent bridge*, or 
 | `browser_act` | One or more actions (same vocabulary as the built-in agent), then the new page state in the same reply. |
 | `browser_task` | Hands a whole chore to the extension's local-model agent and returns its answer. It's cheap on the caller's context. |
 
-Actions run with the same probe and approval gates as the built-in agent. Submits, sends, deletes, payments and
-passwords wait for **Allow once** in the sidebar, and each agent action is listed in the sidebar log.
+Actions run with the same probe and approval gates as the built-in agent. The sidebar's approval level applies: with
+the default, submits, sends, deletes, payments and passwords wait for **Allow once** in the sidebar. Each agent action
+is listed in the sidebar log.
 
 ```sh
 # Claude Code
@@ -207,6 +350,7 @@ src/agent/    loop, prompt/history, tools + tolerant parser
 src/llm/      streaming client: OpenAI-compatible + Ollama native
 src/browser/  host: tabs, frames, navigation, screenshots
 src/bridge.ts agent bridge, extension side (poll loop, observe/act/task)
+src/vault.ts  Bitwarden (bw serve) client and site matching; src/agent/login.ts and src/probe/login.ts do the fill
 bridge/       fcu.mjs: MCP stdio server + CLI + localhost hub; SKILL.md for CLI-only harnesses
 e2e/          fixture shop, fake model, Firefox runner
 ```
@@ -218,5 +362,6 @@ e2e/          fixture shop, fake model, Firefox runner
 - Real trusted input (`isTrusted` events). That would need a native-messaging helper driving Firefox over WebDriver BiDi,
   which only matters for the few sites that check.
 - Persisted conversations and follow-up messages in the same run.
+- Injection in screenshots (vision mode) is not covered by the text detector; VPI-Bench-style visual attacks are untested.
 - No checks yet with a real Firefox on macOS, only headless Firefox on Linux. The extension has no platform-specific code
   apart from the `MacCtrl` shortcut.

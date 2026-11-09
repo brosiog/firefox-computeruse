@@ -130,7 +130,7 @@ header { display: flex; align-items: center; gap: 2px; padding: 8px 8px 4px; }
 .model.ok::before { background: var(--ok); opacity: 1; }
 .model.bad::before { background: var(--err); opacity: 1; }
 .model .chev { flex: none; width: 14px; height: 14px; color: var(--muted); }
-.tag {
+.badge {
   font-size: 11px;
   font-weight: 500;
   color: var(--muted);
@@ -142,7 +142,11 @@ header { display: flex; align-items: center; gap: 2px; padding: 8px 8px 4px; }
   align-items: center;
   gap: 5px;
 }
-.tag.ok::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.badge.ok::before, .badge.bad::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.badge.bad { color: var(--err); background: color-mix(in srgb, var(--err) 12%, var(--bg)); }
+.badge.bad::before { background: var(--err); }
+button.badge { border: 0; cursor: pointer; }
+button.badge:hover { background: color-mix(in srgb, var(--err) 20%, var(--bg)); }
 
 .banner {
   margin: 4px 12px 0;
@@ -260,6 +264,7 @@ main {
 
 /* ---------- composer ---------- */
 #composer { padding: 0 12px 12px; position: relative; }
+.attachbar:not([hidden]) + #composer::before { display: none; }
 #composer::before {
   content: '';
   position: absolute;
@@ -351,4 +356,110 @@ dialog .checks { display: flex; flex-direction: column; gap: 10px; }
   padding: 12px 20px;
   background: var(--popup-bg);
   border-top: 1px solid var(--line);
+}
+
+/* ---------- attached tabs (@ mentions) ---------- */
+.attachbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 8px; position: relative; }
+.attachbar::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 20px; background: linear-gradient(transparent, var(--bg)); pointer-events: none; }
+.tabchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  background: var(--bubble);
+  border-radius: 999px;
+  padding: 3px 5px 3px 10px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.tabchip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.tabchip.current { background: var(--accent-soft); padding-right: 10px; }
+.tabchip .here { font-weight: 600; color: var(--accent); flex: none; }
+.tabchip button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+}
+.tabchip button:hover { background: var(--hover); color: var(--fg); }
+.tabchip img, .mentions img { width: 14px; height: 14px; flex: none; }
+.msg.user .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.msg.user .tabchip { background: color-mix(in srgb, var(--fg) 8%, transparent); padding-right: 10px; }
+.msg.user .tabchip .here { color: inherit; }
+
+#at { width: 30px; height: 30px; margin: 2px 0 2px -10px; font-size: 15px; font-weight: 600; border-radius: 50%; }
+.mentions {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% + 6px);
+  z-index: 5;
+  max-height: min(320px, 55vh);
+  overflow-y: auto;
+  background: var(--popup-bg);
+  color: var(--popup-fg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.18);
+  padding: 6px;
+  scrollbar-width: thin;
+}
+.mentions .head { font-size: 11.5px; color: var(--muted); padding: 4px 8px 6px; }
+.mentions .none { font-size: 12.5px; color: var(--muted); padding: 6px 8px; }
+.mentions [role='option'] { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; cursor: pointer; }
+.mentions [role='option'][aria-selected='true'] { background: var(--hover); }
+.mentions .ico { width: 16px; height: 16px; flex: none; border-radius: 4px; background: var(--bubble); }
+.mentions .ico:has(img) { background: none; }
+.mentions .txt { min-width: 0; flex: 1; line-height: 1.35; }
+.mentions .title, .mentions .host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mentions .title { font-size: 13px; }
+.mentions .host { font-size: 11.5px; color: var(--muted); }
+.mentions .tag { font-size: 11px; color: var(--muted); flex: none; }
+.mentions .on .tag { color: var(--ok); }
+
+/* ---------- settings: ChatGPT sign-in, Bitwarden ---------- */
+#chatgptBox .row { margin-top: 0; }
+#chatgptBox p { margin: 6px 0 0; }
+fieldset.vault {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 10px 14px 14px;
+  margin: 4px 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+fieldset.vault legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
+fieldset.vault .hint { margin: 0; }
+fieldset.vault code { font-size: 11.5px; background: var(--bubble); border-radius: 4px; padding: 0 4px; }
+fieldset.vault .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+fieldset.vault #vaultPw { flex: 1 1 140px; min-width: 0; }
+.vault-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bubble);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.vault-status .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.vault-status .dot.ok { background: var(--ok); }
+.vault-status .dot.warn { background: var(--warn); }
+.vault-status .dot.bad { background: var(--err); }
+.card .warn {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--err) 12%, var(--bg));
+  color: var(--fg);
+  font-size: 12.5px;
 }

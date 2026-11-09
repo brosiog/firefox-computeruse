@@ -1,7 +1,8 @@
 // Page text as compact markdown for reading tasks: main content, headings, lists, tables, with refs inline on links and
 // buttons so the model can act on what it read. Paged by character offset; filtered by query.
 
-import { SKIP_TAGS, isBlock, clean, flatChildren, isNativeInteractive, isRenderedStyle, nameOf, roleOf } from './dom';
+import { looksInjected } from './inject';
+import { SKIP_TAGS, isBlock, visuallyHidden, sameColorAsBackground, testLayout, clean, flatChildren, isNativeInteractive, isRenderedStyle, nameOf, roleOf } from './dom';
 import type { Refs } from './refs';
 
 const SKIP_IN_READ = new Set(['NAV', 'FOOTER', 'ASIDE']);
@@ -26,17 +27,27 @@ export function pickContentRoot(doc: Document): Element {
   return best && bestLen > bodyLen * 0.25 ? best : doc.body ?? doc.documentElement;
 }
 
-export function readLines(root: Element, prefix: string, refs: Refs): string[] {
+/** `plain`: links and buttons keep their names but not their refs (text read from another tab, where refs would be
+ * mistaken for refs on the current page). They are still registered, so their URLs count as seen. */
+export function readLines(root: Element, prefix: string, refs: Refs, taint?: (el: Element) => void, plain = false): string[] {
   const win = root.ownerDocument.defaultView!;
   const lines: string[] = [];
   let buf = '';
   let lead = '';
   const isBodyRoot = root === root.ownerDocument.body;
 
+  let lineEls: Element[] = [];
   const flush = () => {
     const t = buf.replace(/\s+/g, ' ').trim();
     buf = '';
-    if (t) lines.push(lead + t);
+    if (t) {
+      // Text written to AI agents is marked, and the links inside it are tainted (acting on them needs approval).
+      if (looksInjected(t)) {
+        lines.push('⚠ ' + lead + t);
+        for (const e of lineEls) taint?.(e);
+      } else lines.push(lead + t);
+    }
+    lineEls = [];
     lead = '';
   };
 
@@ -45,6 +56,7 @@ export function readLines(root: Element, prefix: string, refs: Refs): string[] {
       const p = (node as Text).parentElement;
       const vis = p ? win.getComputedStyle(p).visibility : '';
       if (vis === 'hidden' || vis === 'collapse') return;
+      if (p && !testLayout() && sameColorAsBackground(p, win)) return;
       buf += node.nodeValue ?? '';
       return;
     }
@@ -58,6 +70,7 @@ export function readLines(root: Element, prefix: string, refs: Refs): string[] {
     if (SKIP_TAGS.has(tag) || tag === 'svg' || tag === 'SVG' || tag === 'IFRAME') return;
     const style = win.getComputedStyle(el);
     if (!isRenderedStyle(style)) return;
+    if (visuallyHidden(el, style, el.getBoundingClientRect(), win)) return;
     const role = roleOf(el);
     if (isBodyRoot && (SKIP_IN_READ.has(tag) || (role && SKIP_ROLES.has(role)))) return;
 
@@ -75,7 +88,11 @@ export function readLines(root: Element, prefix: string, refs: Refs): string[] {
     }
     if (isNativeInteractive(el) && (tag === 'A' || tag === 'BUTTON' || role === 'button' || role === 'link')) {
       const n = nameOf(el, 120);
-      if (n) buf += ` ${n}[${prefix}${refs.show(el)}] `;
+      if (n) {
+        const id = refs.show(el);
+        buf += plain ? ` ${n} ` : ` ${n}[${prefix}${id}] `;
+        lineEls.push(el);
+      }
       return;
     }
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
@@ -100,8 +117,8 @@ export function readLines(root: Element, prefix: string, refs: Refs): string[] {
   return lines.filter((l, i) => l !== lines[i - 1]);
 }
 
-export function readPage(root: Element, prefix: string, refs: Refs, offset: number, budget: number, query?: string): string {
-  const lines = readLines(root, prefix, refs);
+export function readPage(root: Element, prefix: string, refs: Refs, offset: number, budget: number, query?: string, taint?: (el: Element) => void, plain = false): string {
+  const lines = readLines(root, prefix, refs, taint, plain);
   if (query && query.trim()) {
     const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1);
     const keep = new Set<number>();

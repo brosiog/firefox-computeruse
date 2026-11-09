@@ -13,7 +13,8 @@
         <svg class="chev" viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5" /></svg>
       </button>
       <span class="spacer"></span>
-      <span id="agents" class="tag ok" title="A coding agent is connected through the bridge" hidden>agents</span>
+      <button id="fullauto" class="badge bad" title="The agent acts without asking, even for payments and passwords" hidden>full auto</button>
+      <span id="agents" class="badge ok" title="A coding agent is connected through the bridge" hidden>agents</span>
       <button id="new" class="icon" title="New task" aria-label="New task">
         <svg viewBox="0 0 16 16"><path d="M13.5 8.5v3a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" /><path d="m11.5 2.5 2 2L8 10l-2.5.5L6 8z" /></svg>
       </button>
@@ -28,6 +29,7 @@
     <main id="log">
       <div class="empty" id="empty">
         <h1>What can I do in this tab?</h1>
+        <p class="hint">It always sees the tab you're on. Type @ to add other tabs it can read and use.</p>
         <div class="suggest">
           <button type="button" data-task="Summarize this page">Summarize this page</button>
           <button type="button" data-task="Find the cheapest item on this page">Find the cheapest item</button>
@@ -35,9 +37,13 @@
         </div>
       </div>
     </main>
+    <div id="attachbar" class="attachbar" hidden></div>
     <form id="composer">
+      <div id="mentions" class="mentions" role="listbox" aria-label="Tabs to attach" hidden></div>
       <div class="field">
-        <textarea id="input" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
+        <button id="at" type="button" class="icon" title="Attach tabs the agent can read and use (or type @)" aria-label="Attach tabs">@</button>
+        <textarea id="input" rows="1" placeholder="Ask anything · type @ to add tabs" autocomplete="off"
+          role="combobox" aria-autocomplete="list" aria-controls="mentions" aria-expanded="false"></textarea>
         <button id="go" type="submit" class="send" title="Run" aria-label="Run">
           <svg class="i-run" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
           <svg class="i-stop" viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1.2" fill="currentColor" stroke="none" /></svg>
@@ -56,14 +62,23 @@
           <select name="kind">
             <option value="openai">OpenAI-compatible (/v1/chat/completions)</option>
             <option value="ollama">Ollama native (/api/chat)</option>
+            <option value="chatgpt">ChatGPT plan (Sign in with ChatGPT)</option>
           </select>
         </label>
-        <label>Base URL <input name="baseUrl" type="url" required /></label>
+        <div id="chatgptBox" class="card" hidden>
+          <span class="row">
+            <button type="button" id="chatgptSignIn" class="primary">Continue with ChatGPT</button>
+            <button type="button" id="chatgptSignOut" hidden>Sign out</button>
+          </span>
+          <span id="chatgptStatus" class="hint"></span>
+          <p class="hint">Page text and screenshots go to OpenAI and count against your ChatGPT plan.</p>
+        </div>
+        <label id="baseUrlRow">Base URL <input name="baseUrl" type="url" required /></label>
         <label>Model
           <span class="row"><input name="model" list="models" /><button type="button" id="fetchModels">List</button></span>
           <datalist id="models"></datalist>
         </label>
-        <label>API key (optional) <input name="apiKey" type="password" autocomplete="off" /></label>
+        <label id="apiKeyRow">API key (optional) <input name="apiKey" type="password" autocomplete="off" /></label>
         <div class="grid">
           <label>Context window <input name="contextWindow" type="number" min="2048" step="1024" /></label>
           <label>Max steps <input name="maxSteps" type="number" min="1" max="200" /></label>
@@ -99,13 +114,33 @@
         </div>
         <label>Approvals
           <select name="approval">
+            <option value="every">Ask before every action (clicks, typing, navigation)</option>
             <option value="ask">Ask before submitting, sending or deleting</option>
             <option value="auto">Auto (still asks for payments and passwords)</option>
+            <option value="off">Full auto: never ask, the agent runs on its own</option>
           </select>
         </label>
         <label>Agent bridge (lets Claude Code, Codex, … use this browser; empty = off)
           <input name="bridgeUrl" placeholder="http://127.0.0.1:47823" />
         </label>
+        <fieldset class="vault">
+          <legend>Bitwarden logins</legend>
+          <label class="check"><input name="vault" type="checkbox" /> Let the agent sign in with my saved logins (it never sees them)</label>
+          <p class="hint">Needs the Bitwarden CLI running <code>bw serve</code> on this computer, logged in and unlocked. Fills go only to the site a login is saved for.</p>
+          <label>bw serve URL <input name="vaultUrl" placeholder="http://localhost:8087" /></label>
+          <label class="check"><input name="vaultAsk" type="checkbox" /> Ask me before each sign-in</label>
+          <label class="check"><input name="vaultAgents" type="checkbox" /> Coding agents on the bridge may use logins too</label>
+          <div class="vault-status"><span id="vaultDot" class="dot"></span><span id="vaultOut">Not checked yet</span></div>
+          <div class="row">
+            <input id="vaultPw" type="password" autocomplete="off" placeholder="Master password" aria-label="Bitwarden master password" />
+            <button type="button" id="vaultUnlock">Unlock</button>
+          </div>
+          <div class="row">
+            <button type="button" id="vaultCheck">Check status</button>
+            <button type="button" id="vaultLock">Lock vault</button>
+          </div>
+          <p class="hint">The master password goes only to bw serve on this computer. It is never stored.</p>
+        </fieldset>
         <div class="checks">
           <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
           <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>

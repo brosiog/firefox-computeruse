@@ -120,6 +120,10 @@ jobs:
         if: ${{ !cancelled() && hashFiles('e2e/bridge.mjs') != '' }}
         run: pnpm e2e:bridge
 
+      - name: e2e — login lab (Bitwarden sign-in situations, through the bridge)
+        if: ${{ !cancelled() }}
+        run: pnpm e2e:login
+
       - name: Oracle bench — every task solvable through the extension (must be 100%)
         if: ${{ !cancelled() }}
         env:

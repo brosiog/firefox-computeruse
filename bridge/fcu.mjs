@@ -235,7 +235,8 @@ const ACTIONS_DOC = `Each action is one JSON object, same vocabulary as the in-b
 {"tool":"navigate","url":"example.com"}  {"tool":"back"}  {"tool":"read","query":"price"} (full page text; offset pages)
 {"tool":"find","text":"Contact us"} (search the whole page for elements/text, returns refs)
 {"tool":"tab_new","url":"..."}  {"tool":"tab_switch","tab":2}  {"tool":"tab_close"}  {"tool":"wait","seconds":2}
-Refs are the bracketed numbers in the page state ("12", or "3:7" inside frames). Actions run in order and stop at the first failure or page change; what did not run is reported. Submits, sends, deletes, payments and passwords wait for the user's approval in the sidebar.`;
+{"tool":"login","enter":true} signs in with the user's saved Bitwarden login for the site (you never see the username or password; optional ref picks the form, option picks an account when several are listed). Available only when the user allowed agents to use Bitwarden (otherwise it is an unknown tool).
+Refs are the bracketed numbers in the page state ("12", or "3:7" inside frames). Actions run in order and stop at the first failure or page change; what did not run is reported. Actions may wait for the user's approval in the sidebar, depending on its approval level (status shows it): every = every action, ask = submits, sends, deletes, payments and passwords, auto = payments and passwords only, off = never.`;
 
 const TOOLS = [
   {

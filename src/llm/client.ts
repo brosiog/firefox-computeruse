@@ -1,10 +1,18 @@
 // Minimal streaming chat client for local model servers. Two wire formats:
 // - Ollama native (/api/chat, NDJSON): num_ctx, keep_alive, `format` (JSON schema), `think: false`.
 // - OpenAI-compatible (/chat/completions, SSE): LM Studio, llama.cpp server, mlx_lm.server, vLLM, cloud APIs.
+// - ChatGPT plan (Responses API, SSE): Sign in with ChatGPT; the background page supplies the access token.
 // Output is constrained to the action schema where the server supports it, falling back step by step
 // (schema → json → off) and remembering what worked per server and model.
 
 import type { Settings, Structured } from '../settings';
+import { RESOURCE, askBackground } from './chatgpt-auth';
+
+/** Where ChatGPT access tokens come from. The sidebar asks the background page; tests swap in a stub. */
+let chatGptToken = (force: boolean) => askBackground<string>({ type: 'chatgpt-token', force });
+export function setChatGptTokenSource(f: (force: boolean) => Promise<string>) {
+  chatGptToken = f;
+}
 
 export interface ChatMsg {
   role: 'system' | 'user' | 'assistant';
@@ -93,9 +101,10 @@ async function* lines(body: ReadableStream<Uint8Array>, signal: AbortSignal): As
   }
 }
 
-/** Grammar-constrained decoding can collapse into endless whitespace inside the JSON; stop early and fall back. */
-function degenerate(text: string): boolean {
-  return /\s{48}$/.test(text) || /(.{1,8})\1{30}$/s.test(text);
+/** Grammar-constrained decoding can collapse into endless whitespace inside the JSON: throws so the caller stops early
+ *  and falls back. */
+function checkDegenerate(text: string): void {
+  if (/\s{48}$/.test(text) || /(.{1,8})\1{30}$/s.test(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
 }
 
 export async function chat(
@@ -118,7 +127,12 @@ export async function chat(
   if (!schema) state.level = 'off';
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const r = s.kind === 'ollama' ? await ollama(s, msgs, schema, state, signal, onText) : await openai(s, msgs, schema, state, signal, onText);
+      const r =
+        s.kind === 'ollama'
+          ? await ollama(s, msgs, schema, state, signal, onText)
+          : s.kind === 'chatgpt'
+            ? await responses(s, msgs, schema, state, signal, onText)
+            : await openai(s, msgs, schema, state, signal, onText);
       if (schema) learned.set(key, state);
       return r;
     } catch (e) {
@@ -146,9 +160,9 @@ export async function chat(
   throw new LlmError('model server kept rejecting the request');
 }
 
-async function post(url: string, body: unknown, s: Settings, signal: AbortSignal): Promise<Response> {
+async function post(url: string, body: unknown, s: Settings, signal: AbortSignal, bearer = s.apiKey): Promise<Response> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (s.apiKey) headers.Authorization = `Bearer ${s.apiKey}`;
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
   let res: Response;
   try {
     res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
@@ -162,11 +176,16 @@ async function post(url: string, body: unknown, s: Settings, signal: AbortSignal
     try {
       const j = JSON.parse(t);
       m = j.error?.message ?? j.error ?? j.message ?? t;
+      // Responses API: the code says what to do, the param says which field to drop.
+      if (j.error?.code) m = `${m} [${j.error.code}${j.error.param ? `, param: ${j.error.param}` : ''}]`;
     } catch {
       // plain text error
     }
     if (res.status === 403 && /origin/i.test(String(m))) {
       m += ' — the server rejected the extension origin. Reload the extension (it removes the Origin header), or allow moz-extension://* on the server.';
+    }
+    if (/subscription_sharing_usage_limit_exceeded/.test(String(m))) {
+      throw new LlmError('ChatGPT plan usage limit reached for this app. See ChatGPT → Settings → Usage.', 429);
     }
     throw new LlmError(`model server error ${res.status}: ${String(m).slice(0, 400)}`, res.status);
   }
@@ -207,7 +226,7 @@ async function ollama(
     if (c) {
       text += c;
       onText?.(text);
-      if (degenerate(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
+      checkDegenerate(text);
     }
     if (j.done) {
       usage.promptTokens = j.prompt_eval_count;
@@ -280,7 +299,7 @@ async function openai(
       if (!firstTok) firstTok = performance.now();
       text += c;
       onText?.(text);
-      if (degenerate(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
+      checkDegenerate(text);
     }
     if (j.usage) {
       usage.promptTokens = j.usage.prompt_tokens;
@@ -301,6 +320,95 @@ async function openai(
   return { text: stripThinking(text), usage, mode: st.level };
 }
 
+/**
+ * ChatGPT plan through the public Responses API (Sign in with ChatGPT). Differences from chat/completions: the
+ * system prompt goes in `instructions` (system items are rejected); `store: false` and `stream: true` are required;
+ * temperature and max_output_tokens are not accepted; success is only `response.completed`.
+ */
+async function responses(
+  s: Settings,
+  msgs: ChatMsg[],
+  schema: object | null,
+  st: { level: Level; noThinkOk: boolean },
+  signal: AbortSignal,
+  onText?: (t: string) => void,
+): Promise<ChatResult> {
+  const t0 = performance.now();
+  const body: Record<string, unknown> = {
+    model: s.model,
+    instructions: msgs.filter(m => m.role === 'system').map(m => m.content).join('\n\n'),
+    input: msgs
+      .filter(m => m.role !== 'system')
+      .map(m => ({
+        type: 'message',
+        role: m.role,
+        content:
+          m.role === 'assistant'
+            ? [{ type: 'output_text', text: m.content }]
+            : [{ type: 'input_text', text: m.content }, ...(m.images ?? []).map(b => ({ type: 'input_image', image_url: `data:image/jpeg;base64,${b}` }))],
+      })),
+    store: false,
+    stream: true,
+  };
+  if (st.level === 'schema' && schema) body.text = { format: { type: 'json_schema', name: 'action', schema, strict: false } };
+  else if (st.level === 'json') body.text = { format: { type: 'json_object' } };
+  if (s.effort !== 'default' && st.noThinkOk) body.reasoning = { effort: s.effort };
+  const url = `${RESOURCE}/responses`;
+  let res: Response;
+  try {
+    res = await post(url, body, s, signal, await chatGptToken(false));
+  } catch (e) {
+    // An access token can be revoked or rotated early: refresh once and retry.
+    if ((e as LlmError).status !== 401 || signal.aborted) throw e;
+    res = await post(url, body, s, signal, await chatGptToken(true));
+  }
+  let text = '';
+  const usage: Usage = { totalMs: 0 };
+  let firstTok = 0;
+  let completed = false;
+  for await (const line of lines(res.body!, signal)) {
+    if (!line.startsWith('data:')) continue;
+    let j: any;
+    try {
+      j = JSON.parse(line.slice(5).trim());
+    } catch {
+      continue;
+    }
+    switch (j.type) {
+      case 'response.output_text.delta':
+        if (!firstTok) firstTok = performance.now();
+        text += j.delta ?? '';
+        onText?.(text);
+        checkDegenerate(text);
+        break;
+      case 'response.completed': {
+        completed = true;
+        const u = j.response?.usage;
+        if (u) {
+          usage.promptTokens = u.input_tokens;
+          usage.cachedTokens = u.input_tokens_details?.cached_tokens;
+          usage.outputTokens = u.output_tokens;
+        }
+        break;
+      }
+      case 'response.incomplete':
+        throw new LlmError(`ChatGPT stopped early: ${j.response?.incomplete_details?.reason ?? 'incomplete'}`, 500);
+      case 'response.failed':
+      case 'error': {
+        const err = j.response?.error ?? j.error ?? j;
+        if (err.code === 'subscription_sharing_usage_limit_exceeded') {
+          throw new LlmError('ChatGPT plan usage limit reached for this app. See ChatGPT → Settings → Usage.', 429);
+        }
+        throw new LlmError(`ChatGPT error: ${err.message ?? 'request failed'}${err.code ? ` [${err.code}]` : ''}`, err.code === 'subscription_sharing_unsupported_capability' ? 400 : 503);
+      }
+    }
+  }
+  if (!completed) throw new LlmError('ChatGPT stream ended before the response completed', 503);
+  usage.totalMs = performance.now() - t0;
+  if (firstTok) usage.promptMs = firstTok - t0;
+  return { text: stripThinking(text), usage, mode: st.level };
+}
+
 export interface ModelInfo {
   contextLength?: number;
   vision?: boolean;
@@ -308,6 +416,14 @@ export interface ModelInfo {
 }
 
 export async function listModels(s: Settings): Promise<string[]> {
+  if (s.kind === 'chatgpt') {
+    const res = await fetch(`${RESOURCE}/models`, { headers: { Authorization: `Bearer ${await chatGptToken(false)}` } });
+    if (!res.ok) throw new LlmError(`listing models failed: ${res.status}`, res.status);
+    const j = await res.json();
+    // ChatGPT plan: { models: [{ slug, visibility }] }, only `list` entries are offered.
+    if (Array.isArray(j.models)) return j.models.filter((m: any) => m.visibility === 'list').map((m: any) => m.slug);
+    return (j.data ?? []).map((m: { id: string }) => m.id);
+  }
   const base = trimSlash(s.baseUrl);
   const headers: Record<string, string> = s.apiKey ? { Authorization: `Bearer ${s.apiKey}` } : {};
   const url = s.kind === 'ollama' ? `${base}/api/tags` : `${base}/models`;
@@ -343,6 +459,8 @@ export async function modelInfo(s: Settings): Promise<ModelInfo> {
  */
 export async function prewarm(s: Settings, msgs: ChatMsg[], signal?: AbortSignal): Promise<number> {
   const t0 = performance.now();
+  // Nothing to load on a hosted model, and the Responses API can't cap the reply at one token: it would cost plan usage.
+  if (s.kind === 'chatgpt') return 0;
   try {
     await chat({ ...s, maxOutput: 1, effort: s.effort === 'default' ? 'default' : 'none' }, msgs, null, signal ?? AbortSignal.timeout(120000));
   } catch {

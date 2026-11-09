@@ -1,11 +1,14 @@
 import { defineBackground } from 'wxt/utils/define-background';
+import { handleChatGptMessage } from '../src/llm/chatgpt-auth';
 
 declare const browser: any;
 
 // The background is deliberately tiny: the agent runs in the sidebar page, which stays alive while it is open.
-// Two jobs here:
+// Three jobs here:
 // 1. The toolbar button toggles the sidebar.
-// 2. Local model servers (Ollama, Splash) reject requests whose Origin is moz-extension://. The Origin header is
+// 2. Sign in with ChatGPT: the sign-in tab and token refreshes live here, so several sidebars never race a rotating
+//    refresh token (src/llm/chatgpt-auth.ts).
+// 3. Local model servers (Ollama, Splash) reject requests whose Origin is moz-extension://. The Origin header is
 //    removed from the extension's own requests so no server-side origin allow-list is needed.
 export default defineBackground(() => {
   // e2e/bench builds only (WXT_E2E_URL set at build time): a job loop. For each job from the fixture server: set the
@@ -19,6 +22,8 @@ export default defineBackground(() => {
   browser.action.onClicked.addListener(() => {
     browser.sidebarAction.toggle();
   });
+
+  browser.runtime.onMessage.addListener((m: unknown) => handleChatGptMessage(m));
 
   // Every request the extension's own pages make (model servers, model lists) goes out without an Origin header.
   // Gating this on the configured server's origin raced with settings changes: the bench caught Splash answering
@@ -35,6 +40,9 @@ export default defineBackground(() => {
 });
 
 async function bridgeTestTabs(url: string) {
+  // Settings the test wants the panel to start with, if any.
+  const settings = await fetch(`${url}/e2e/settings`).then(r => (r.ok ? r.json() : null), () => null);
+  if (settings) await browser.storage.local.set({ settings });
   await browser.tabs.create({ url: `${url}/`, active: true });
   await browser.tabs.create({ url: browser.runtime.getURL(`/sidepanel.html?tabUrl=${encodeURIComponent(url)}`), active: false });
 }
@@ -65,6 +73,11 @@ async function benchLoop(base: string) {
       setTimeout(resolve, job.timeoutMs ?? 300000);
     });
     const q = new URLSearchParams({ task: job.task, tabUrl: job.tabUrl, e2e: base, job: job.id, approve: job.approve ?? 'yes' });
+    // Tabs the job attaches to the task (the composer's @ mentions), by URL prefix: opened first, in the background.
+    if (job.attach?.length) {
+      for (const url of job.attach) await browser.tabs.create({ url, active: false });
+      q.set('attach', job.attach.join('|'));
+    }
     await browser.tabs.create({ url: browser.runtime.getURL(`/sidepanel.html?${q}`), active: false });
     await done;
     await browser.tabs.update(start.id, { active: true }).catch(() => {});

@@ -44,6 +44,19 @@ export default defineConfig({
     },
   },
   vite: () => ({
-    build: { target: 'firefox128', sourcemap: false },
+    // Firefox 128 has modulepreload; the polyfill is dead weight.
+    build: { target: 'firefox128', sourcemap: false, modulePreload: { polyfill: false } },
+    plugins: [
+      {
+        // The sidebar's HTML ships as written: drop its indentation (no <pre> or <textarea> content to disturb), and the
+        // line breaks before tags where whitespace never renders (options, head elements).
+        name: 'fcu:strip-html-whitespace',
+        transformIndexHtml: {
+          order: 'post',
+          handler: (html: string) =>
+            html.replace(/\n[ \t]+/g, '\n').replace(/>\n(?=<(?:\/?(?:option|select|optgroup|head|body|html)|meta|link|script|title)\b)/g, '>'),
+        },
+      },
+    ],
   }),
 });

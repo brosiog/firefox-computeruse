@@ -18,11 +18,14 @@ const EXPECT = {
   geckoId: 'firefox-computeruse@local',
   permissions: ['scripting', 'storage', 'tabs', 'theme', 'webNavigation', 'webRequest', 'webRequestBlocking'],
   hostPermissions: ['<all_urls>'],
-  // Total bytes in dist/. The extension is ~93 kB today; the budget leaves room to grow, not to double.
-  maxBytes: 120_000,
+  // Total bytes in dist/. ~146 kB: main is ~123 kB (prompt-injection defenses, Sign in with ChatGPT, @-attached tabs)
+  // and Bitwarden logins add ~23 kB (sign-in field finder, redaction, vault client); the themed chat-style sidebar adds
+  // ~7 kB (browser-theme mapping, styles, icons), ~153 kB in all. The budget leaves room to grow, not to double.
+  maxBytes: 165_000,
 };
-// Strings that only exist in the test-only code paths of entrypoints/background.ts (tree-shaken from release builds).
-const TEST_HOOK_MARKERS = ['/e2e/next', 'sidepanel.html?tabUrl='];
+// Strings that only exist in test-only code paths (tree-shaken from release builds): the background job loop, the
+// sidebar's e2e/bench harness, and the step traces the bench records.
+const TEST_HOOK_MARKERS = ['/e2e/next', 'sidepanel.html?tabUrl=', '/e2e/report', '/e2e/approve', 'promptChars'];
 
 const errors = [];
 const fail = msg => errors.push(msg);

@@ -6,6 +6,7 @@
 import type { Gate, ProbeResult, Risk, ScrollDir } from '../protocol';
 import { clean, deepActive, isDisabled, isEditable, isSecretField, isTextField, nameOf, roleOf } from './dom';
 import { describe } from './snapshot';
+import { DISMISS } from './inject';
 
 type Win = Window & typeof globalThis;
 
@@ -34,9 +35,34 @@ function inConsentUi(el: Element): boolean {
   return false;
 }
 
+/** A form that submits to another site than the page's: what is in it leaves the site. */
+let topOrigin: string | null = null;
+/** Set by the probe from the host: the origin of the tab's top page (frames cannot read it themselves). */
+export function setTopOrigin(o: string | null) {
+  topOrigin = o;
+}
+
+function crossSiteForm(form: HTMLFormElement | null): string | null {
+  if (!form) return null;
+  try {
+    const target = new URL(form.action || form.ownerDocument.location.href, form.ownerDocument.location.href);
+    if (!/^https?:$/.test(target.protocol)) return null;
+    // Compared with the site the user is on: a third-party frame's own form counts as another site too.
+    const site = topOrigin ?? form.ownerDocument.location.origin;
+    return target.origin !== site ? target.host : null;
+  } catch {
+    return null;
+  }
+}
+
 export function classifyClick(el: Element): Gate {
   const label = `${nameOf(el, 100)} ${el.getAttribute('value') ?? ''} ${el.getAttribute('aria-label') ?? ''}`;
   const what = describe(el);
+  const formOf = el.closest('form') as HTMLFormElement | null;
+  const xs = crossSiteForm(formOf);
+  if (xs && el.matches('button, input[type=submit], input[type=image], [role=button], a, [onclick]')) {
+    return { risk: 'exfil', what: `${what}, which sends the form to another site (${xs})` };
+  }
   if (inConsentUi(el)) return { risk: 'read', what };
   // A plain link to another page is navigation, whatever its label ("Proceed to checkout", "Delete account" settings
   // page). Script links (#, javascript:) can act, so they are judged by label like buttons.
@@ -63,6 +89,8 @@ export function classifyClick(el: Element): Gate {
 function classifyEnter(field: Element): Gate {
   const what = `Enter in ${describe(field)}`;
   const form = (field as HTMLInputElement).form ?? null;
+  const xs = crossSiteForm(form);
+  if (xs) return { risk: 'exfil', what: `${what}, which sends the form to another site (${xs})` };
   if (field.tagName === 'TEXTAREA' || isEditable(field)) {
     // Chat-style composers send on Enter.
     return isSearchForm(form, field) ? { risk: 'read', what } : { risk: 'write', what: `send via ${what}` };
@@ -221,10 +249,35 @@ export interface ActCtx {
   doc: Document;
   approved: boolean;
   gated: (risk: Risk) => boolean;
+  /** The element sits on page text written to AI agents. */
+  isTainted?: (el: Element) => boolean;
+}
+
+/** Acting on an element that came with injected text is the user's call, except closing a dialog. */
+function suspicious(el: Element, ctx: ActCtx, verb: string): Gate | null {
+  // A link inside a frame embedded from another site (an ad, a "sponsored" box) leads where that site wants, not
+  // where the user's page does: following one is the user's call.
+  const a = el.closest('a[href]');
+  const own = el.ownerDocument.location.origin;
+  if (a && topOrigin && own !== topOrigin && own !== 'null') {
+    return { risk: 'suspicious', what: `${verb} ${describe(el)}, a link inside a frame from another site (${el.ownerDocument.location.host})` };
+  }
+  if (!ctx.isTainted?.(el)) return null;
+  if (DISMISS.test(nameOf(el, 40).trim())) return null;
+  return { risk: 'suspicious', what: `${verb} ${describe(el)}, which is part of page text written to AI agents (possible prompt injection)` };
 }
 
 function withheld(g: Gate): ProbeResult {
   return { ok: false, error: `needs approval: ${g.what}`, gate: g };
+}
+
+/** The withheld result when this action needs approval first, else null. An action that is otherwise harmless (risk
+ *  `read`) still asks, as `act`, when every action needs approval. */
+function hold(g: Gate, ctx: ActCtx, verb: string): ProbeResult | null {
+  if (ctx.approved) return null;
+  if (ctx.gated(g.risk)) return withheld(g);
+  if (g.risk === 'read' && ctx.gated('act')) return withheld({ risk: 'act', what: `${verb} ${g.what}` });
+  return null;
 }
 
 export function click(el: Element, ctx: ActCtx): ProbeResult {
@@ -235,8 +288,10 @@ export function click(el: Element, ctx: ActCtx): ProbeResult {
   if (tag === 'INPUT' && (el as HTMLInputElement).type === 'file') {
     return { ok: false, error: 'File pickers cannot be opened by the agent. Ask the user to choose the file.' };
   }
-  const g = classifyClick(el);
-  if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
+  const sus = suspicious(el, ctx, 'click');
+  if (sus && !ctx.approved && ctx.gated('suspicious')) return withheld(sus);
+  const held = hold(classifyClick(el), ctx, 'click');
+  if (held) return held;
 
   // Links that open a new tab would hit the popup blocker; the host opens them as a tab instead.
   const a = el.closest('a[href]') as HTMLAnchorElement | null;
@@ -261,22 +316,23 @@ function toggledState(el: Element): string {
   return '';
 }
 
-export function type(el: Element, text: string, clear: boolean, enter: boolean, ctx: ActCtx): ProbeResult {
+/** `perKeyMax`: text up to this length is typed key by key (default 80); longer text is pasted. */
+export function type(el: Element, text: string, clear: boolean, enter: boolean, ctx: ActCtx, perKeyMax = 80): ProbeResult {
   const { win, doc } = ctx;
   if (isDisabled(el)) return { ok: false, error: `${describe(el)} is disabled.` };
   const editable = isEditable(el) || (el as HTMLElement).isContentEditable;
   if (!isTextField(el) && !editable) {
     // Typing into a wrapper: use the first text field inside it.
     const inner = el.querySelector('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea, [contenteditable=""], [contenteditable=true]');
-    if (inner) return type(inner, text, clear, enter, ctx);
+    if (inner) return type(inner, text, clear, enter, ctx, perKeyMax);
     return { ok: false, error: `${describe(el)} is not a text field. Click it first if it opens one.` };
   }
   if ((el as HTMLInputElement).readOnly) return { ok: false, error: `${describe(el)} is read-only.` };
   if (isSecretField(el) && !ctx.approved && ctx.gated('secret')) return withheld({ risk: 'secret', what: `type into ${describe(el)}` });
-  if (enter) {
-    const g = classifyEnter(el);
-    if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
-  }
+  const sus = suspicious(el, ctx, 'type into');
+  if (sus && !ctx.approved && ctx.gated('suspicious')) return withheld(sus);
+  const held = (enter && hold(classifyEnter(el), ctx, 'type, then press')) || hold({ risk: 'read', what: `into ${describe(el)}` }, ctx, 'type');
+  if (held) return held;
 
   bringIntoView(el, win);
   flash(el, doc);
@@ -309,7 +365,7 @@ export function type(el: Element, text: string, clear: boolean, enter: boolean, 
       inputEvent(f, win, 'deleteContentBackward', null);
     }
     // Per-key events for short text so autocompletes and validators react as they do for a person.
-    if (text.length <= 80) {
+    if (text.length <= perKeyMax) {
       for (const ch of text) {
         const k: KeySpec = { key: ch === '\n' ? 'Enter' : ch, ctrl: false, shift: ch !== ch.toLowerCase(), alt: false, meta: false };
         const go = keyDown(f, k, win);
@@ -378,6 +434,8 @@ export function select(el: Element, option: string, ctx: ActCtx): ProbeResult {
     return { ok: false, error: `No option "${option}" in ${describe(el)}. Options: ${opts.slice(0, 30).map(x => clean(x.text, 30)).join(' | ')}` };
   }
   if (o.disabled) return { ok: false, error: `Option "${clean(o.text, 40)}" is disabled.` };
+  const held = hold({ risk: 'read', what: `"${clean(o.text, 60)}" in ${describe(el)}` }, ctx, 'select');
+  if (held) return held;
   flash(el, ctx.doc);
   s.focus({ preventScroll: true });
   o.selected = true;
@@ -396,23 +454,26 @@ export function key(target: Element | null, spec: string, ctx: ActCtx): ProbeRes
   const el = target ?? deepActive(doc) ?? doc.body;
   if (target) (target as HTMLElement).focus?.({ preventScroll: true });
   const field = el && (isTextField(el) || isEditable(el));
+  const on = el === doc.body ? 'the page' : describe(el);
   if (k.key === 'Enter' && !k.ctrl && !k.meta && el && field) {
-    const g = classifyEnter(el);
-    if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
+    const held = hold(classifyEnter(el), ctx, 'press');
+    if (held) return held;
     return { ok: true, msg: pressEnter(el, ctx) + '.' };
   }
   if (k.key === 'Enter' || k.key === ' ') {
     const role = roleOf(el);
     if (role && /^(button|link|menuitem|option|tab|checkbox|radio|switch|treeitem)/.test(role) && !(k.key === ' ' && role === 'link')) {
-      const g = classifyClick(el);
-      if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
+      const held = hold(classifyClick(el), ctx, `press ${spec} on`);
+      if (held) return held;
     }
   }
+  const held = hold({ risk: 'read', what: on }, ctx, `press ${spec} on`);
+  if (held) return held;
   const go = keyDown(el, k, win);
   let effect = '';
   if (go) effect = defaultKeyAction(el, k, ctx);
   keyUp(el, k, win);
-  return { ok: true, msg: `pressed ${spec} on ${el === doc.body ? 'the page' : describe(el)}${go ? effect : ' (handled by the page)'}.` };
+  return { ok: true, msg: `pressed ${spec} on ${on}${go ? effect : ' (handled by the page)'}.` };
 }
 
 function defaultKeyAction(el: Element, k: KeySpec, ctx: ActCtx): string {

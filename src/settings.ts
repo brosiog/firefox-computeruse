@@ -1,5 +1,7 @@
-export type ProviderKind = 'ollama' | 'openai';
-export type ApprovalMode = 'ask' | 'auto';
+export type ProviderKind = 'ollama' | 'openai' | 'chatgpt';
+/** every: each action that changes the page or tabs asks; ask: submits, sends, deletes, payments and passwords ask;
+ *  auto: only payments and passwords ask; off: nothing asks, the agent runs on its own. */
+export type ApprovalMode = 'every' | 'ask' | 'auto' | 'off';
 export type Structured = 'auto' | 'schema' | 'json' | 'off';
 export type Effort = 'default' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -32,6 +34,14 @@ export interface Settings {
   historyBudget: number;
   /** Agent bridge hub (bridge/fcu.mjs) the sidebar connects to, so coding agents can use the browser. Empty: off. */
   bridgeUrl: string;
+  /** Opt-in: the agent may sign in with Bitwarden logins (through `bw serve`), without ever seeing them. */
+  vault: boolean;
+  /** The Bitwarden CLI's local API (`bw serve`). */
+  vaultUrl: string;
+  /** Ask in the sidebar before each fill (on by default; the site check applies either way). */
+  vaultAsk: boolean;
+  /** Coding agents on the bridge (and tasks they delegate) may use Bitwarden logins too. Off by default. */
+  vaultAgents: boolean;
   /** Benchmarks only: replaces the built-in system prompt. Not shown in the UI. */
   systemOverride?: string;
 }
@@ -47,6 +57,14 @@ export interface Preset {
 }
 
 export const PRESETS: Record<string, Preset> = {
+  chatgpt: {
+    label: 'ChatGPT plan (Sign in with ChatGPT)',
+    kind: 'chatgpt',
+    baseUrl: 'https://api.openai.com/v1',
+    contextWindow: 128000,
+    history: 'extend',
+    hint: 'Uses your ChatGPT subscription. Sign in below, then pick a model.',
+  },
   splash: {
     label: 'Splash (LAN Mac)',
     kind: 'openai',
@@ -83,6 +101,10 @@ export const DEFAULTS: Settings = {
   history: 'extend',
   historyBudget: 16000,
   bridgeUrl: 'http://127.0.0.1:47823',
+  vault: false,
+  vaultUrl: 'http://localhost:8087',
+  vaultAsk: true,
+  vaultAgents: false,
 };
 
 declare const browser: any;

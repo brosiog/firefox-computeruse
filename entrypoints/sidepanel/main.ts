@@ -1,20 +1,33 @@
 import { runAgent, type AgentEvent } from '../../src/agent/loop';
 import type { Action } from '../../src/agent/tools';
-import { createHost } from '../../src/browser/host';
+import { createHost, restrictedReason } from '../../src/browser/host';
 import { chat, listModels, modelInfo, prewarm, type Usage } from '../../src/llm/client';
 import { primer, systemPrompt } from '../../src/agent/prompt';
 import type { Gate } from '../../src/protocol';
 import { createBridgeHandler, startBridge } from '../../src/bridge';
+import { askBackground, type ChatGptStatus } from '../../src/llm/chatgpt-auth';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
 import { followTheme } from '../../src/ui/theme';
+import { createVault, type Vault } from '../../src/vault';
 
 declare const browser: any;
+
+// Bitwarden: one client per URL. `agents`: for coding agents on the bridge (and tasks they delegate), which also
+// need their own opt-in.
+let vaultClient: { url: string; v: Vault } | null = null;
+function vaultFor(agents: boolean): Vault | null {
+  if (!settings.vault || !settings.vaultUrl.trim() || (agents && !settings.vaultAgents)) return null;
+  const url = settings.vaultUrl.trim();
+  if (vaultClient?.url !== url) vaultClient = { url, v: createVault(url) };
+  return vaultClient.v;
+}
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const log = $('log');
 const input = $<HTMLTextAreaElement>('input');
 const go = $<HTMLButtonElement>('go');
 const statusBtn = $<HTMLButtonElement>('status');
+const PLACEHOLDER = 'Ask anything · type @ to add tabs';
 
 let settings: Settings = { ...DEFAULTS };
 let running: AbortController | null = null;
@@ -72,7 +85,8 @@ let cur: { root: HTMLElement; think: HTMLElement; act: HTMLElement; res: HTMLEle
 function onEvent(e: AgentEvent) {
   switch (e.type) {
     case 'trace':
-      if (e2eUrl) e2eTraces.push(e.step);
+      // Only test builds emit traces (see runAgent).
+      e2eTraces.push(e.step);
       break;
     case 'step': {
       const root = el('div', 'step');
@@ -112,6 +126,17 @@ function onEvent(e: AgentEvent) {
         cur.res.textContent = `unusable reply: ${e.error}\n${e.raw.slice(0, 200)}`;
       }
       break;
+    case 'attached':
+      add(
+        el(
+          'div',
+          'note',
+          e.tabs
+            .map(t => (t.error ? `tab ${t.n}: could not read (${t.error})` : `read tab ${t.n} "${t.title.slice(0, 40)}" (${k(t.chars)} chars)`))
+            .join(' · '),
+        ),
+      );
+      break;
     case 'compacted':
       add(el('div', 'note', 'older steps were summarized to fit the context window'));
       break;
@@ -127,38 +152,45 @@ function onEvent(e: AgentEvent) {
   }
 }
 
-const e2eParams = new URLSearchParams(location.search);
-const e2eUrl = e2eParams.get('e2e');
+const e2eParams = new URLSearchParams(import.meta.env.WXT_E2E_URL ? location.search : '');
+// Test builds only (WXT_E2E_URL set at build time, as for e2e and bench): in dist/ this is null, and every branch that
+// checks it is compiled out with it.
+const e2eUrl = import.meta.env.WXT_E2E_URL ? e2eParams.get('e2e') : null;
 let e2eApprovals = 0;
 let e2eDeclines = 0;
+let e2eSecurityDeclines = 0;
 const e2eTraces: unknown[] = [];
 
 function approve(gate: Gate, a: Action): Promise<boolean> {
   return new Promise(resolve => {
     if (e2eUrl) {
       // Test build: answer automatically (the job says how), counting it so the test can check the gate fired.
+      // A careful user declines what the security gates flag; everything else follows the job's setting.
+      if (gate.risk === 'exfil' || gate.risk === 'suspicious') {
+        e2eSecurityDeclines++;
+        setTimeout(() => resolve(false), 100);
+        return;
+      }
       const yes = e2eParams.get('approve') !== 'no';
       if (yes) e2eApprovals++;
       else e2eDeclines++;
       setTimeout(() => resolve(yes), 100);
       return;
     }
-    // e2e:bridge build only (compiled out of dist/): the fixture server answers the card, as a person would.
-    const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
-    if (bridgeTest) {
-      fetch(`${bridgeTest}/e2e/approve?risk=${gate.risk}`)
-        .then(r => r.text())
-        .then(t => resolve(t === 'yes'), () => resolve(false));
-      return;
-    }
     const card = el('div', 'card');
     const label: Record<string, string> = {
-      write: 'The agent wants to submit or send something',
-      delete: 'The agent wants to delete something',
-      pay: 'The agent wants to make a payment or purchase',
-      secret: 'The agent wants to type into a password or payment field',
+      act: 'act on the page',
+      write: 'submit or send something',
+      delete: 'delete something',
+      pay: 'make a payment or purchase',
+      secret: 'type into a password or payment field',
+      exfil: 'send a form to a different website',
+      suspicious: 'act on page text that addresses AI agents (possible prompt injection)',
+      login: 'sign in with your Bitwarden login',
     };
-    card.append(el('strong', '', label[gate.risk] ?? 'Approval needed'), el('div', 'hint', gate.what));
+    const want = label[gate.risk];
+    card.append(el('strong', '', want ? `The agent wants to ${want}` : 'Approval needed'), el('div', 'hint', gate.what));
+    if (gate.warn) card.append(el('div', 'warn', gate.warn));
     if (a.text && gate.risk !== 'secret') card.append(el('div', 'hint', `text: ${a.text.slice(0, 200)}`));
     const row = el('div', 'row');
     const yes = el('button', 'primary', 'Allow once');
@@ -174,11 +206,26 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
     yes.onclick = () => done(true);
     no.onclick = () => done(false);
     running?.signal.addEventListener('abort', () => done(false), { once: true });
+    // e2e:bridge build only (compiled out of dist/): the card is shown as usual, and the fixture server answers it, as
+    // a person would.
+    const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
+    if (bridgeTest) {
+      fetch(`${bridgeTest}/e2e/approve?risk=${gate.risk}&what=${encodeURIComponent(gate.what)}`)
+        .then(r => r.text())
+        .then(t => row.isConnected && done(t === 'yes'), () => row.isConnected && done(false));
+    }
   });
 }
 
+let e2eAsks = 0;
 function ask(q: string): Promise<string | null> {
   return new Promise(resolve => {
+    if (e2eUrl) {
+      // Test build: the user only repeats the task (the bench measures what the agent does on its own).
+      e2eAsks++;
+      setTimeout(() => resolve('Please continue with the task as I gave it.'), 100);
+      return;
+    }
     const card = el('div', 'card');
     card.append(el('strong', '', 'The agent asks'), el('div', '', q), el('div', 'hint', 'Answer in the box below.'));
     add(card);
@@ -186,7 +233,7 @@ function ask(q: string): Promise<string | null> {
     input.focus();
     pendingAsk = v => {
       pendingAsk = null;
-      input.placeholder = 'Ask anything';
+      input.placeholder = PLACEHOLDER;
       resolve(v);
     };
     running?.signal.addEventListener('abort', () => pendingAsk?.(null), { once: true });
@@ -195,8 +242,9 @@ function ask(q: string): Promise<string | null> {
 
 async function targetTab(): Promise<{ tabId: number; windowId: number }> {
   const params = new URLSearchParams(location.search);
-  // Test hook: a sidebar page opened as a tab (e2e) drives the first tab whose URL starts with `tabUrl`.
-  if (params.get('tabUrl')) {
+  // Test hook (e2e, bench and e2e:bridge builds only; compiled out of dist/): a sidebar page opened as a tab drives the
+  // first tab whose URL starts with `tabUrl`.
+  if ((import.meta.env.WXT_E2E_URL || import.meta.env.WXT_BRIDGE_TEST) && params.get('tabUrl')) {
     const all = await browser.tabs.query({});
     const t = all.find((x: any) => x.url?.startsWith(params.get('tabUrl')!));
     if (t) return { tabId: t.id, windowId: t.windowId };
@@ -217,7 +265,7 @@ let warming: Promise<number> | null = null;
 function warm(): Promise<number> {
   if (!settings.model || Date.now() - warmedAt < 120000) return warming ?? Promise.resolve(0);
   warmedAt = Date.now();
-  const sys = settings.systemOverride || systemPrompt({ vision: settings.vision, reasoning: settings.reasoning });
+  const sys = settings.systemOverride || systemPrompt({ vision: settings.vision, reasoning: settings.reasoning, login: !!vaultFor(false) });
   warming = prewarm(settings, primer(sys));
   return warming;
 }
@@ -231,15 +279,214 @@ input.addEventListener('input', () => {
   void warm();
 });
 
+// ---------- attached tabs (@ mentions) ----------
+// Typing @ (or the @ button) lists open tabs; each one picked becomes a chip. When the task runs, the agent gets those
+// tabs' text up front and can switch to them, so it can work across them (compare, collect, fill one from another).
+
+interface Attached {
+  id: number;
+  title: string;
+  url: string;
+  icon?: string;
+}
+const MAX_ATTACH = 6;
+let attached: Attached[] = [];
+let menu: { start: number; items: any[]; sel: number } | null = null;
+let menuSeq = 0;
+const mentions = $('mentions');
+const attachbar = $('attachbar');
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+};
+// Only icons that need no network request: a remote favicon would be fetched from the extension page.
+const iconOf = (t: any): string | undefined => (typeof t.favIconUrl === 'string' && t.favIconUrl.startsWith('data:image/') ? t.favIconUrl : undefined);
+
+function tabChip(a: Attached, onRemove?: () => void): HTMLElement {
+  const c = el('span', 'tabchip');
+  c.title = `${a.title}\n${a.url}`;
+  if (a.icon) {
+    const img = el('img');
+    img.src = a.icon;
+    img.alt = '';
+    c.append(img);
+  }
+  c.append(el('span', 't', a.title || hostOf(a.url)));
+  if (onRemove) {
+    const x = el('button', '', '×');
+    x.type = 'button';
+    x.title = 'Remove';
+    x.setAttribute('aria-label', `Remove ${a.title}`);
+    x.onclick = () => {
+      onRemove();
+      input.focus();
+    };
+    c.append(x);
+  }
+  return c;
+}
+
+// The tab the agent works in is always included: it leads the chip row (no ×) and follows the user's tab switches.
+let currentTab: Attached | null = null;
+
+function currentChip(a: Attached): HTMLElement {
+  const c = tabChip(a);
+  c.classList.add('current');
+  c.title = `The agent always works in the tab you're on.\n${a.title}\n${a.url}`;
+  c.prepend(el('span', 'here', 'This tab'));
+  return c;
+}
+
+function renderAttached() {
+  attachbar.innerHTML = '';
+  if (currentTab) attachbar.append(currentChip(currentTab));
+  for (const a of attached) attachbar.append(tabChip(a, () => ((attached = attached.filter(x => x.id !== a.id)), renderAttached())));
+  attachbar.hidden = !currentTab && !attached.length;
+}
+
+async function refreshCurrent() {
+  try {
+    const { tabId } = await targetTab();
+    const t = await browser.tabs.get(tabId);
+    currentTab = { id: t.id, title: t.title ?? '', url: t.url ?? '', icon: iconOf(t) };
+  } catch {
+    currentTab = null;
+  }
+  renderAttached();
+}
+browser.tabs.onActivated?.addListener(() => void refreshCurrent());
+browser.tabs.onUpdated?.addListener((id: number, info: any) => {
+  if (id === currentTab?.id && (info.title || info.url || info.favIconUrl)) void refreshCurrent();
+});
+
+/** The @word being typed at the caret, if any. */
+function mentionAt(): { start: number; q: string } | null {
+  const pos = input.selectionStart;
+  if (pos !== input.selectionEnd) return null;
+  const m = /(^|\s)@([^\s@]*)$/.exec(input.value.slice(0, pos));
+  return m ? { start: pos - m[2].length - 1, q: m[2].toLowerCase() } : null;
+}
+
+function closeMenu() {
+  menu = null;
+  menuSeq++;
+  mentions.hidden = true;
+  input.setAttribute('aria-expanded', 'false');
+  input.removeAttribute('aria-activedescendant');
+}
+
+async function updateMenu() {
+  const at = pendingAsk ? null : mentionAt();
+  if (!at) return closeMenu();
+  const seq = ++menuSeq;
+  const [all, win] = await Promise.all([browser.tabs.query({}), browser.windows.getCurrent()]);
+  if (seq !== menuSeq) return;
+  const words = at.q.split(/\s+/).filter(Boolean);
+  const items = (all as any[])
+    // The current tab is always included (its chip leads the row), so it is not offered.
+    .filter(t => !restrictedReason(t.url ?? '') && t.id !== currentTab?.id)
+    .filter(t => words.every(w => `${t.title ?? ''} ${t.url ?? ''}`.toLowerCase().includes(w)))
+    // This window first, in tab order; then other windows, most recently used first.
+    .sort((a, b) => (a.windowId === win.id ? 0 : 1) - (b.windowId === win.id ? 0 : 1) || (a.windowId === win.id ? a.index - b.index : (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0)))
+    .slice(0, 40);
+  menu = { start: at.start, items, sel: Math.min(menu?.sel ?? 0, Math.max(0, items.length - 1)) };
+  mentions.innerHTML = '';
+  mentions.append(el('div', 'head', attached.length >= MAX_ATTACH ? `At most ${MAX_ATTACH} tabs` : 'Add a tab (the one you are on is always included)'));
+  if (!items.length) mentions.append(el('div', 'none', at.q ? `No tab matches "${at.q}"` : 'No other tabs the agent can read'));
+  items.forEach((t, i) => {
+    const on = attached.some(a => a.id === t.id);
+    const o = el('div', on ? 'on' : '');
+    o.id = `mention-${i}`;
+    o.setAttribute('role', 'option');
+    o.setAttribute('aria-selected', String(i === menu!.sel));
+    // A fixed slot, so titles line up whether or not the tab has an icon.
+    const slot = el('span', 'ico');
+    const icon = iconOf(t);
+    if (icon) {
+      const img = el('img');
+      img.src = icon;
+      img.alt = '';
+      slot.append(img);
+    }
+    o.append(slot);
+    const txt = el('div', 'txt');
+    txt.append(el('div', 'title', t.title || hostOf(t.url)), el('div', 'host', hostOf(t.url)));
+    o.append(txt);
+    const tag = on ? '✓ attached' : t.windowId !== win.id ? 'other window' : '';
+    if (tag) o.append(el('span', 'tag', tag));
+    // mousedown, not click: the textarea keeps focus and the caret.
+    o.addEventListener('mousedown', ev => {
+      ev.preventDefault();
+      pick(i);
+    });
+    mentions.append(o);
+  });
+  mentions.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  moveSel(0);
+}
+
+function moveSel(d: number) {
+  if (!menu || !menu.items.length) return;
+  menu.sel = (menu.sel + d + menu.items.length) % menu.items.length;
+  mentions.querySelectorAll('[role=option]').forEach((o, i) => o.setAttribute('aria-selected', String(i === menu!.sel)));
+  input.setAttribute('aria-activedescendant', `mention-${menu.sel}`);
+  $(`mention-${menu.sel}`)?.scrollIntoView({ block: 'nearest' });
+}
+
+/** Attaches (or detaches, if already attached) the menu's i-th tab, and replaces the typed @word with @host. */
+function pick(i: number) {
+  if (!menu) return;
+  const t = menu.items[i];
+  if (!t) return;
+  const caret = input.selectionStart;
+  const has = attached.some(a => a.id === t.id);
+  let token = '';
+  if (has) attached = attached.filter(a => a.id !== t.id);
+  else if (attached.length < MAX_ATTACH) {
+    attached.push({ id: t.id, title: t.title ?? '', url: t.url ?? '', icon: iconOf(t) });
+    token = `@${hostOf(t.url ?? '')} `;
+  } else return;
+  input.value = input.value.slice(0, menu.start) + token + input.value.slice(caret);
+  const pos = menu.start + token.length;
+  input.setSelectionRange(pos, pos);
+  renderAttached();
+  closeMenu();
+  input.focus();
+}
+
+input.addEventListener('input', () => void updateMenu());
+input.addEventListener('click', () => void updateMenu());
+input.addEventListener('blur', () => setTimeout(() => document.activeElement !== input && closeMenu(), 0));
+$('at').onclick = () => {
+  const pos = input.selectionStart;
+  const pre = input.value.slice(0, pos);
+  const ins = (pre && !/\s$/.test(pre) ? ' ' : '') + '@';
+  input.setRangeText(ins, pos, input.selectionEnd, 'end');
+  input.focus();
+  void updateMenu();
+};
+
 /** Runs the built-in agent. `fromAgent`: a coding agent delegated the task over the bridge; questions go back to it. */
-async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{ success: boolean; answer: string } | null> {
+async function start(task: string, fromAgent?: { maxSteps?: number }, tabs: Attached[] = []): Promise<{ success: boolean; answer: string } | null> {
   if (running) return null;
   if (!settings.model) {
     if (fromAgent) return { success: false, answer: 'No model is configured in the Firefox Computer Use settings.' };
     openSettings();
     return null;
   }
-  add(el('div', 'msg user', fromAgent ? `agent: ${task}` : task));
+  const bubble = el('div', 'msg user', fromAgent ? `agent: ${task}` : task);
+  if (tabs.length) {
+    const row = el('div', 'tabs');
+    if (currentTab) row.append(currentChip(currentTab));
+    for (const a of tabs) row.append(tabChip(a));
+    bubble.append(row);
+  }
+  add(bubble);
   const ctrl = (running = new AbortController());
   go.title = 'Stop';
   go.setAttribute('aria-label', 'Stop');
@@ -254,8 +501,9 @@ async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{
   const s = fromAgent?.maxSteps ? { ...settings, maxSteps: fromAgent.maxSteps } : settings;
   try {
     const { tabId, windowId } = await targetTab();
-    const host = createHost(tabId, windowId);
-    let r = await runAgent({ task, settings: s, host, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal });
+    const ids = tabs.map(a => a.id);
+    const host = createHost(tabId, windowId, ids);
+    let r = await runAgent({ task, settings: s, host, tabs: ids, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal, vault: vaultFor(!!fromAgent) });
     if (question) r = { success: false, answer: `The agent needs more information: ${question}` };
     (window as any).__lastResult = r;
     if (e2eUrl) {
@@ -266,6 +514,8 @@ async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{
           result: r,
           approvals: e2eApprovals,
           declines: e2eDeclines,
+          securityDeclines: e2eSecurityDeclines,
+          asks: e2eAsks,
           transcript: log.innerText,
           traces: e2eTraces,
         }),
@@ -304,9 +554,28 @@ $('composer').addEventListener('submit', ev => {
   if (!v) return;
   input.value = '';
   fit();
-  void start(v);
+  const tabs = attached;
+  attached = [];
+  renderAttached();
+  closeMenu();
+  void start(v, undefined, tabs);
 });
 input.addEventListener('keydown', ev => {
+  if (menu && !ev.isComposing) {
+    const keys: Record<string, () => void> = {
+      ArrowDown: () => moveSel(1),
+      ArrowUp: () => moveSel(-1),
+      Enter: () => pick(menu!.sel),
+      Tab: () => pick(menu!.sel),
+      Escape: closeMenu,
+    };
+    const f = keys[ev.key];
+    if (f && (menu.items.length || ev.key === 'Escape')) {
+      ev.preventDefault();
+      f();
+      return;
+    }
+  }
   if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
     ev.preventDefault();
     $<HTMLFormElement>('composer').requestSubmit();
@@ -329,8 +598,22 @@ $('new').onclick = () => {
   const e = emptyState.cloneNode(true) as HTMLElement;
   log.append(e);
   wireSuggestions(e);
+  attached = [];
+  renderAttached();
   input.focus();
 };
+
+/** Test builds only: `attach=<url prefix>|<url prefix>` attaches the first tab matching each, as @ mentions would. */
+async function e2eAttach(): Promise<Attached[]> {
+  const want = e2eUrl ? e2eParams.get('attach') : null;
+  if (!want) return [];
+  const all: any[] = await browser.tabs.query({});
+  return want
+    .split('|')
+    .map(p => all.find(t => t.url?.startsWith(p)))
+    .filter(Boolean)
+    .map(t => ({ id: t.id, title: t.title ?? '', url: t.url ?? '' }));
+}
 
 // ---------- settings ----------
 
@@ -350,7 +633,54 @@ function fill(s: Settings) {
   const match = Object.entries(PRESETS).find(([, p]) => p.baseUrl === s.baseUrl && p.kind === s.kind);
   presetSel.value = match?.[0] ?? '';
   $('presetHint').textContent = match?.[1].hint ?? '';
+  syncKind();
 }
+
+// ChatGPT plan: sign-in box instead of a server URL and key.
+const kindSel = form.elements.namedItem('kind') as HTMLSelectElement;
+function syncKind() {
+  const gpt = kindSel.value === 'chatgpt';
+  $('chatgptBox').hidden = !gpt;
+  $('baseUrlRow').hidden = gpt;
+  $('apiKeyRow').hidden = gpt;
+  if (gpt) {
+    (form.elements.namedItem('baseUrl') as HTMLInputElement).value = PRESETS.chatgpt.baseUrl;
+    void showChatGpt();
+  }
+}
+kindSel.addEventListener('change', syncKind);
+
+function renderChatGpt(st: ChatGptStatus) {
+  $('chatgptStatus').textContent = st.signedIn ? `Signed in${st.email ? ` as ${st.email}` : ''}` : 'Not signed in';
+  $('chatgptSignIn').hidden = st.signedIn;
+  $('chatgptSignOut').hidden = !st.signedIn;
+}
+async function showChatGpt() {
+  try {
+    renderChatGpt(await askBackground<ChatGptStatus>({ type: 'chatgpt-status' }));
+  } catch (e) {
+    $('chatgptStatus').textContent = (e as Error).message;
+  }
+}
+$('chatgptSignIn').onclick = async () => {
+  $('chatgptStatus').textContent = 'finish signing in in the new tab…';
+  try {
+    renderChatGpt(await askBackground<ChatGptStatus>({ type: 'chatgpt-signin' }));
+    // Offer the account's models right away; the first listed one is a sensible default.
+    $<HTMLButtonElement>('fetchModels').click();
+  } catch (e) {
+    $('chatgptStatus').textContent = (e as Error).message;
+  }
+};
+$('chatgptSignOut').onclick = async () => {
+  try {
+    const { revoked } = await askBackground<{ revoked: boolean }>({ type: 'chatgpt-signout' });
+    renderChatGpt({ signedIn: false });
+    if (!revoked) $('chatgptStatus').textContent = 'Signed out here; OpenAI did not confirm the revocation. You can disconnect the app in ChatGPT Settings.';
+  } catch (e) {
+    $('chatgptStatus').textContent = (e as Error).message;
+  }
+};
 
 function read(): Settings {
   const s: any = { ...settings };
@@ -369,6 +699,8 @@ presetSel.onchange = () => {
   const p = PRESETS[presetSel.value];
   if (!p) return;
   const s = read();
+  // A model name from another provider means nothing here.
+  if (!p.model && p.kind !== s.kind) s.model = '';
   s.kind = p.kind;
   s.baseUrl = p.baseUrl;
   if (p.model) s.model = p.model;
@@ -411,15 +743,56 @@ $('test').onclick = async () => {
   }
 };
 
+// The master password goes to bw serve on this computer only: never stored, never in settings, never logged.
+const vaultOut = $('vaultOut');
+const vaultPw = $<HTMLInputElement>('vaultPw');
+const vaultNow = () => createVault(read().vaultUrl.trim() || DEFAULTS.vaultUrl);
+const STATE_TEXT: Record<string, [string, string]> = {
+  unlocked: ['Unlocked: the agent can sign in with your logins', 'ok'],
+  locked: ['Locked: enter your master password and press Unlock, or run bw unlock before bw serve', 'warn'],
+  unauthenticated: ['Not logged in: run bw login on this computer first', 'bad'],
+};
+async function showVault(p: Promise<{ state: string; email?: string; error?: string }>) {
+  const dot = $('vaultDot');
+  vaultOut.textContent = 'Checking…';
+  dot.className = 'dot';
+  const st = await p;
+  const [text, cls] = st.state === 'unreachable' ? [st.error ?? 'bw serve is not reachable', 'bad'] : (STATE_TEXT[st.state] ?? [st.state, '']);
+  vaultOut.textContent = `${text}${st.email ? ` · ${st.email}` : ''}${st.error && st.state !== 'unreachable' ? ` (${st.error})` : ''}`;
+  dot.className = `dot ${cls}`;
+}
+$('vaultCheck').onclick = () => void showVault(vaultNow().status());
+$('vaultUnlock').onclick = () => {
+  const pw = vaultPw.value;
+  vaultPw.value = '';
+  if (!pw) return void showVault(vaultNow().status());
+  void showVault(vaultNow().unlock(pw));
+};
+vaultPw.addEventListener('keydown', ev => {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  $('vaultUnlock').click();
+});
+$('vaultLock').onclick = () => {
+  const v = vaultNow();
+  void showVault(v.lock().then(() => v.status(), e => ({ state: 'unreachable', error: (e as Error).message })));
+};
+
 function openSettings() {
   fill(settings);
   $('testOut').textContent = '';
+  vaultOut.textContent = settings.vault ? 'Checking…' : 'Off';
+  $('vaultDot').className = 'dot';
+  vaultPw.value = '';
   dlg.showModal();
+  if (settings.vault) void showVault(vaultNow().status());
 }
 $('gear').onclick = openSettings;
 statusBtn.onclick = openSettings;
+$('fullauto').onclick = openSettings;
 
 dlg.addEventListener('close', async () => {
+  vaultPw.value = '';
   if (dlg.returnValue !== 'save') return;
   settings = read();
   await saveSettings(settings);
@@ -435,19 +808,34 @@ const bridgeHandle = createBridgeHandler({
   approve,
   busy: () => !!running,
   runTask: (task, maxSteps) => start(task, { maxSteps }),
+  vault: () => vaultFor(true),
   note: (text, ok) => add(el('div', `note${ok ? '' : ' err'}`, text)),
 });
 let bridge: { url: string; stop: () => void } | null = null;
 function connectBridge() {
-  const url = e2eUrl ? '' : settings.bridgeUrl.trim();
+  // e2e:bridge builds: Firefox also opens the real sidebar at install; only the panel tab under test may take agent
+  // commands, or the hub would split them between two panels.
+  const testSidebar = !!import.meta.env.WXT_BRIDGE_TEST && !new URLSearchParams(location.search).get('tabUrl');
+  const url = e2eUrl || testSidebar ? '' : settings.bridgeUrl.trim();
   if (bridge?.url === url) return;
   bridge?.stop();
   bridge = url ? { url, stop: startBridge(url, bridgeHandle, up => ($('agents').hidden = !up)) } : null;
 }
 
 async function refreshStatus() {
+  $('fullauto').hidden = settings.approval !== 'off';
   statusBtn.querySelector('.label')!.textContent = settings.model || 'Choose a model';
   statusBtn.className = 'model';
+  if (settings.kind === 'chatgpt') {
+    try {
+      const st = await askBackground<ChatGptStatus>({ type: 'chatgpt-status' });
+      statusBtn.classList.add(st.signedIn ? 'ok' : 'bad');
+      statusBtn.title = st.signedIn ? `ChatGPT plan${st.email ? ` (${st.email})` : ''}` : 'Not signed in to ChatGPT: open Settings';
+    } catch {
+      statusBtn.classList.add('bad');
+    }
+    return;
+  }
   try {
     const base = settings.baseUrl.replace(/\/+$/, '');
     const url = settings.kind === 'ollama' ? `${base}/api/tags` : `${base}/models`;
@@ -467,6 +855,7 @@ async function checkPermission() {
 $('grant').onclick = async () => {
   await browser.permissions.request({ origins: ['<all_urls>'] });
   void checkPermission();
+  void refreshCurrent();
 };
 
 void followTheme(browser);
@@ -476,6 +865,7 @@ void followTheme(browser);
   void refreshStatus();
   connectBridge();
   void checkPermission();
+  void refreshCurrent();
   if (e2eUrl) {
     // Test build: record what this page can reach before the run.
     const probes: string[] = [];
@@ -497,7 +887,7 @@ void followTheme(browser);
     const ms = await warm();
     add(el('div', 'note', `prewarm ${Math.round(ms)}ms`));
   } else void warm();
-  if (task) void start(task);
+  if (task) void start(task, undefined, await e2eAttach());
   else input.focus();
   fit();
 })();

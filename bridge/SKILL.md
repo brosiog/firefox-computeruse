@@ -26,6 +26,9 @@ an error; the reason is printed.
   - `{"tool":"tab_switch","tab":2}`
   - `{"tool":"tab_close"}`
   - `{"tool":"wait","seconds":2}`
+  - `{"tool":"login","enter":true}` signs in with the user's saved Bitwarden login for this site, if the user turned that
+    on for agents (`fcu.mjs status` says). You never see the credentials. With several saved accounts, the result lists
+    them: repeat with `"option":"2"`.
 - `fcu.mjs task "<what to do, with every detail>"` hands the whole chore to the extension's local-model agent and
   prints its answer. If that agent needs information, it stops and prints its question. Call `task` again with the
   answer included.
@@ -34,5 +37,6 @@ Rules:
 
 - Use refs from the latest page state only. After a navigation, the old refs are stale.
 - Actions in one call stop at the first failure or page change.
-- Submitting, sending, deleting, paying and typing passwords wait for the user to approve in the sidebar. Say so if a
-  call is slow.
+- Actions may wait for the user to approve in the sidebar. What asks depends on the sidebar's approval level (`status`
+  shows it): `every` asks before every action, `ask` before submits, sends, deletes, payments and passwords, `auto`
+  before payments and passwords only, and `off` never asks. Say so if a call is slow.
