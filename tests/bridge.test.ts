@@ -82,6 +82,36 @@ describe('bridge handler', () => {
   });
 });
 
+describe('bridge handler tab following', () => {
+  it('keeps the agent\'s own tab, but follows a tab the user switched to', async () => {
+    let active = 1;
+    (globalThis as any).browser = { tabs: { query: async () => [{ id: active }], get: async (id: number) => ({ id, url: 'https://x.test/', status: 'complete' }) } };
+    const made: number[] = [];
+    try {
+      const h = createBridgeHandler({
+        settings: () => DEFAULTS,
+        target: async () => ({ tabId: active, windowId: 1 }),
+        approve: async () => true,
+        runTask: async () => null,
+        busy: () => false,
+        note: () => {},
+        tabAlive: async () => true,
+        createHost: tabId => (made.push(tabId), { ...fakeHost([]), tabId }),
+      });
+      await h({ op: 'observe' });
+      await h({ op: 'observe' });
+      expect(made).toEqual([1]);
+      active = 2; // the user clicked another tab
+      await h({ op: 'observe' });
+      expect(made).toEqual([1, 2]);
+      await h({ op: 'observe' });
+      expect(made).toEqual([1, 2]);
+    } finally {
+      delete (globalThis as any).browser;
+    }
+  });
+});
+
 describe('bridge hub (bridge/fcu.mjs)', () => {
   const script = resolve(import.meta.dirname, '../bridge/fcu.mjs');
   const port = String(40000 + Math.floor(Math.random() * 20000));

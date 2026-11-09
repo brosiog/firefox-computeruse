@@ -142,6 +142,14 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       setTimeout(() => resolve(yes), 100);
       return;
     }
+    // e2e:bridge build only (compiled out of dist/): the fixture server answers the card, as a person would.
+    const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
+    if (bridgeTest) {
+      fetch(`${bridgeTest}/e2e/approve?risk=${gate.risk}`)
+        .then(r => r.text())
+        .then(t => resolve(t === 'yes'), () => resolve(false));
+      return;
+    }
     const card = el('div', 'card');
     const label: Record<string, string> = {
       write: 'The agent wants to submit or send something',

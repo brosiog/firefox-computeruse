@@ -59,7 +59,10 @@ export function createBridgeHandler(d: BridgeDeps) {
     return a?.id;
   };
   async function ensureHost(): Promise<{ host: Host; exec: Executor }> {
-    const userSwitched = host && activeAfter !== undefined && (await activeTab()) !== activeAfter;
+    // The user switched tabs if the active tab is neither the agent's tab nor the one active after its last command
+    // (right after tab_new, Firefox may still report the previous tab as active).
+    const active = host ? await activeTab() : undefined;
+    const userSwitched = !!host && active !== undefined && activeAfter !== undefined && active !== host.tabId && active !== activeAfter;
     if (!host || userSwitched || !(await alive(host.tabId))) {
       const { tabId, windowId } = await d.target();
       host = (d.createHost ?? createHost)(tabId, windowId);

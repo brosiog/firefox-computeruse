@@ -10,7 +10,7 @@ import http from 'node:http';
 const SHOP = 'http://127.0.0.1';
 const FRAME = 'http://localhost'; // a different origin: the card field lives in a cross-origin iframe
 export const PORTS = { shop: 8791, frame: 8792, model: 8793 };
-export const state = { orders: [], requests: [], originRejected: 0, prefixShare: [], config: null, report: null, onReport: null };
+export const state = { gates: [], approveNext: null, orders: [], requests: [], originRejected: 0, prefixShare: [], config: null, report: null, onReport: null };
 
 const layout = (title, body, extra = '') => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>body{font:15px system-ui;margin:0}header{display:flex;gap:12px;padding:10px;background:#eee}main{padding:16px}
@@ -39,6 +39,12 @@ function shop(req, res, port, framePort) {
     state.served = true;
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ id: 'e2e', startUrl: state.config.tabUrl + '/', ...state.config }));
+  }
+  if (u.pathname === '/e2e/approve') {
+    // e2e:bridge: the panel asks how to answer an approval card; the test sets the answer and sees which gate fired.
+    state.gates.push(u.searchParams.get('risk'));
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    return setTimeout(() => res.end(state.approveNext ?? 'no'), 300);
   }
   if (u.pathname === '/e2e/report' && req.method === 'POST') {
     let body = '';
