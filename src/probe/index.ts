@@ -4,6 +4,7 @@
 import type { ProbeCmd, ProbeResult, Risk, Snapshot } from '../protocol';
 import * as act from './actions';
 import { Refs } from './refs';
+import { fillLogin, loginForm } from './login';
 import { readPage, pickContentRoot } from './read';
 import { find, findModal, render, scrollFacts, describe } from './snapshot';
 
@@ -37,7 +38,7 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
     win,
     doc,
     approved: !!approved,
-    gated: risk => (gate ?? ['write', 'delete', 'pay', 'secret', 'exfil', 'suspicious']).includes(risk),
+    gated: risk => (gate ?? ['write', 'delete', 'pay', 'secret', 'exfil', 'suspicious', 'login']).includes(risk),
     isTainted: el => {
       for (let p: Element | null = el; p; p = p.parentElement) if (tainted.has(p)) return true;
       return false;
@@ -126,6 +127,19 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
           }
           case 'settle':
             return { ok: true, msg: await act.settle(doc, cmd.quietMs, cmd.maxMs) };
+          case 'loginForm':
+          case 'fillLogin': {
+            let near: Element | undefined;
+            if (cmd.id !== undefined) {
+              const r = resolve(cmd.id);
+              if ('error' in r) return { ok: false, error: r.error };
+              near = r.el;
+            }
+            if (cmd.op === 'loginForm') return loginForm(doc, near);
+            const c = ctx(cmd.approved, cmd.gate);
+            if (!c.approved && c.gated('login')) return { ok: false, error: 'needs approval: sign in with a saved login', gate: { risk: 'login', what: 'sign in with a saved login' } };
+            return fillLogin(doc, near, cmd, c);
+          }
           case 'marks': {
             marks?.remove();
             marks = null;

@@ -316,3 +316,60 @@ describe('taint on a small page', () => {
     expect(s.text).toMatch(/link "this verification link" ⚠/);
   });
 });
+
+describe('sign-in fields (password manager fills)', () => {
+  const at = (url: string) => (window as any).happyDOM.setURL(url);
+  beforeEach(() => at('https://github.com/login'));
+
+  it('finds the sign-in fields, fills them, and masks the username afterwards', async () => {
+    const p = page(`
+      <input type="search" name="q" aria-label="Search">
+      <form method="post" action="/session">
+        <input name="login" aria-label="Username or email">
+        <input type="password" name="password" aria-label="Password">
+        <button type="submit">Sign in</button>
+      </form>`);
+    let submitted = 0;
+    document.querySelector('form')!.addEventListener('submit', e => (e.preventDefault(), submitted++));
+    const f = (await p.run({ op: 'loginForm' })) as any;
+    expect(f).toMatchObject({ ok: true, form: { url: 'https://github.com/login', user: true, pass: true, otp: false } });
+    // Without the host's approval the probe withholds the fill.
+    expect(((await p.run({ op: 'fillLogin', origin: 'https://github.com', username: 'jane@x.test', password: 'pw1', enter: false })) as any).gate?.risk).toBe('login');
+    const r = (await p.run({ op: 'fillLogin', origin: 'https://github.com', username: 'jane@x.test', password: 'pw1', enter: true, approved: true })) as any;
+    expect(r.ok).toBe(true);
+    expect(r.msg).toBe('filled the username and password; pressed Enter and submitted the form');
+    expect((document.querySelector('[name=login]') as HTMLInputElement).value).toBe('jane@x.test');
+    expect((document.querySelector('[name=password]') as HTMLInputElement).value).toBe('pw1');
+    expect((document.querySelector('[name=q]') as HTMLInputElement).value).toBe('');
+    expect(submitted).toBe(1);
+    const s = await snap(p);
+    expect(s.text).not.toContain('jane@x.test');
+    expect(s.text).toMatch(/"Username or email" value=•••/);
+  });
+
+  it('fills nothing if the frame moved to another origin', async () => {
+    const p = page(`<input name="user"><input type="password">`);
+    at('https://evil.test/');
+    const r = (await p.run({ op: 'fillLogin', origin: 'https://github.com', username: 'u', password: 'pw', enter: false, approved: true })) as any;
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('no longer on https://github.com');
+    expect((document.querySelector('[type=password]') as HTMLInputElement).value).toBe('');
+  });
+
+  it('handles username-first pages, one-time codes in boxes, and refuses sign-up forms', async () => {
+    let p = page(`<input type="email" name="identifier" aria-label="Email"><button>Next</button>`);
+    expect(((await p.run({ op: 'loginForm' })) as any).form).toMatchObject({ user: true, pass: false, otp: false });
+
+    p = page(`<input type="search" name="q">`);
+    expect(((await p.run({ op: 'loginForm' })) as any).form).toMatchObject({ user: false, pass: false, otp: false });
+
+    p = page(Array.from({ length: 6 }, (_, i) => `<input maxlength="1" inputmode="numeric" name="otp${i}" autocomplete="one-time-code">`).join(''));
+    expect(((await p.run({ op: 'loginForm' })) as any).form).toMatchObject({ user: false, pass: false, otp: true });
+    const r = (await p.run({ op: 'fillLogin', origin: 'https://github.com', totp: '492817', enter: false, approved: true })) as any;
+    expect(r.msg).toBe('filled the one-time code');
+    expect(Array.from(document.querySelectorAll('input'), i => i.value).join('')).toBe('492817');
+
+    p = page(`<form><input name="email"><input type="password" name="pw"><input type="password" name="pw2"></form>`);
+    expect(((await p.run({ op: 'loginForm' })) as any).error).toContain('sign-up or change-password');
+  });
+});

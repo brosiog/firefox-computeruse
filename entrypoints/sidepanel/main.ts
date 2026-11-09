@@ -6,8 +6,19 @@ import { primer, systemPrompt } from '../../src/agent/prompt';
 import type { Gate } from '../../src/protocol';
 import { createBridgeHandler, startBridge } from '../../src/bridge';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
+import { createVault, type Vault } from '../../src/vault';
 
 declare const browser: any;
+
+// Bitwarden: one client per URL. `agents`: for coding agents on the bridge (and tasks they delegate), which also
+// need their own opt-in.
+let vaultClient: { url: string; v: Vault } | null = null;
+function vaultFor(agents: boolean): Vault | null {
+  if (!settings.vault || !settings.vaultUrl.trim() || (agents && !settings.vaultAgents)) return null;
+  const url = settings.vaultUrl.trim();
+  if (vaultClient?.url !== url) vaultClient = { url, v: createVault(url) };
+  return vaultClient.v;
+}
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const log = $('log');
@@ -165,6 +176,7 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       secret: 'The agent wants to type into a password or payment field',
       exfil: 'The agent wants to send a form to a different website',
       suspicious: 'The agent wants to act on page text that addresses AI agents (possible prompt injection)',
+      login: 'The agent wants to sign in with your Bitwarden login',
     };
     card.append(el('strong', '', label[gate.risk] ?? 'Approval needed'), el('div', 'hint', gate.what));
     if (a.text && gate.risk !== 'secret') card.append(el('div', 'hint', `text: ${a.text.slice(0, 200)}`));
@@ -232,7 +244,7 @@ let warming: Promise<number> | null = null;
 function warm(): Promise<number> {
   if (!settings.model || Date.now() - warmedAt < 120000) return warming ?? Promise.resolve(0);
   warmedAt = Date.now();
-  const sys = settings.systemOverride || systemPrompt({ vision: settings.vision, reasoning: settings.reasoning });
+  const sys = settings.systemOverride || systemPrompt({ vision: settings.vision, reasoning: settings.reasoning, login: !!vaultFor(false) });
   warming = prewarm(settings, primer(sys));
   return warming;
 }
@@ -260,7 +272,7 @@ async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{
   try {
     const { tabId, windowId } = await targetTab();
     const host = createHost(tabId, windowId);
-    let r = await runAgent({ task, settings: s, host, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal });
+    let r = await runAgent({ task, settings: s, host, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal, vault: vaultFor(!!fromAgent) });
     if (question) r = { success: false, answer: `The agent needs more information: ${question}` };
     (window as any).__lastResult = r;
     if (e2eUrl) {
@@ -400,15 +412,50 @@ $('test').onclick = async () => {
   }
 };
 
+// The master password goes to bw serve on this computer only: never stored, never in settings, never logged.
+const vaultOut = $('vaultOut');
+const vaultPw = $<HTMLInputElement>('vaultPw');
+const vaultNow = () => createVault(read().vaultUrl.trim() || DEFAULTS.vaultUrl);
+const STATE_TEXT: Record<string, string> = {
+  unlocked: 'unlocked',
+  locked: 'locked: enter the master password and Unlock, or run `bw unlock` before `bw serve`',
+  unauthenticated: 'not logged in: run `bw login` first',
+};
+async function showVault(p: Promise<{ state: string; email?: string; error?: string }>) {
+  vaultOut.textContent = 'checking…';
+  const st = await p;
+  vaultOut.textContent = st.state === 'unreachable' ? (st.error ?? 'unreachable') : `${st.email ? `${st.email}: ` : ''}${STATE_TEXT[st.state] ?? st.state}${st.error ? ` (${st.error})` : ''}`;
+}
+$('vaultCheck').onclick = () => void showVault(vaultNow().status());
+$('vaultUnlock').onclick = () => {
+  const pw = vaultPw.value;
+  vaultPw.value = '';
+  if (!pw) return void showVault(vaultNow().status());
+  void showVault(vaultNow().unlock(pw));
+};
+vaultPw.addEventListener('keydown', ev => {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  $('vaultUnlock').click();
+});
+$('vaultLock').onclick = () => {
+  const v = vaultNow();
+  void showVault(v.lock().then(() => v.status(), e => ({ state: 'unreachable', error: (e as Error).message })));
+};
+
 function openSettings() {
   fill(settings);
   $('testOut').textContent = '';
+  vaultOut.textContent = '';
+  vaultPw.value = '';
   dlg.showModal();
+  if (settings.vault) void showVault(vaultNow().status());
 }
 $('gear').onclick = openSettings;
 statusBtn.onclick = openSettings;
 
 dlg.addEventListener('close', async () => {
+  vaultPw.value = '';
   if (dlg.returnValue !== 'save') return;
   settings = read();
   await saveSettings(settings);
@@ -424,6 +471,7 @@ const bridgeHandle = createBridgeHandler({
   approve,
   busy: () => !!running,
   runTask: (task, maxSteps) => start(task, { maxSteps }),
+  vault: () => vaultFor(true),
   note: (text, ok) => add(el('div', `note${ok ? '' : ' err'}`, text)),
 });
 let bridge: { url: string; stop: () => void } | null = null;

@@ -8,6 +8,8 @@ import type { Settings } from '../settings';
 import { fence, toUrl, type Host } from '../browser/host';
 import { buildMessages, compact, estimateTokens, systemPrompt, taskMessage, type Step } from './prompt';
 import { actionSchema, canonical, extractJson, parseAction, type Action } from './tools';
+import { login } from './login';
+import type { Vault } from '../vault';
 
 export type AgentEvent =
   | { type: 'step'; n: number }
@@ -52,6 +54,8 @@ export interface RunOptions {
   signal: AbortSignal;
   chat?: typeof realChat;
   now?: () => Date;
+  /** Bitwarden, when the user turned logins on (and, for delegated tasks, allowed agents). Offers the login tool. */
+  vault?: Vault | null;
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>
@@ -63,8 +67,8 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 export function gatesFor(mode: Settings['approval']): Risk[] {
   // Payments and secrets are always the user's call; writes and deletes ask only in Ask mode.
   // Cross-site form submissions and actions on text aimed at the agent ask in both modes: they are how injected
-  // pages exfiltrate data or hijack the run.
-  return mode === 'auto' ? ['pay', 'secret', 'exfil', 'suspicious'] : ['write', 'delete', 'pay', 'secret', 'exfil', 'suspicious'];
+  // pages exfiltrate data or hijack the run. Password-manager fills too (unless the user turned that ask off).
+  return mode === 'auto' ? ['pay', 'secret', 'exfil', 'suspicious', 'login'] : ['write', 'delete', 'pay', 'secret', 'exfil', 'suspicious', 'login'];
 }
 
 /** Live preview of the `think` field while the JSON streams in. */
@@ -83,10 +87,11 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   const chat = o.chat ?? realChat;
   const t0 = Date.now();
   // Benchmarks swap the system prompt (ablations, variants) without rebuilding; normal settings never set this.
-  const system = s.systemOverride || systemPrompt({ vision: s.vision, reasoning: s.reasoning });
+  const vault = o.vault ?? null;
+  const system = s.systemOverride || systemPrompt({ vision: s.vision, reasoning: s.reasoning, login: !!vault });
   const date = (o.now?.() ?? new Date()).toISOString().slice(0, 10);
   const task = taskMessage(o.task, date);
-  const schema = actionSchema(s.vision, s.reasoning);
+  const schema = actionSchema(s.vision, s.reasoning, !!vault);
   let steps: Step[] = [];
   let prevRefs = new Set<string>();
   let lastKey = '';
@@ -96,7 +101,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let parseFails = 0;
   let wantShot = false;
   // The task enables the executor's navigation-provenance and planted-answer tracking (see ExecContext.task).
-  const exec = createExecutor({ host, settings: s, ui, signal, task: o.task });
+  const exec = createExecutor({ host, settings: s, ui, signal, task: o.task, vault });
   let bounced = false;
 
   const finish = (success: boolean, answer: string, n: number) => {
@@ -184,7 +189,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     llmRetries = 0;
     modelMs = performance.now() - tModel;
 
-    const parsed = parseAction(res.text, s.vision);
+    const parsed = parseAction(res.text, s.vision, !!vault);
     if (!parsed.ok) {
       ui.event({ type: 'parse-error', raw: res.text, error: parsed.error });
       trace({ raw: res.text, action: null, parseError: parsed.error });
@@ -254,6 +259,8 @@ export interface ExecContext {
    * pages through the bridge, not through this executor; browser_task runs the full agent loop with both checks.
    */
   task?: string;
+  /** Bitwarden; without it the login tool fails. */
+  vault?: Vault | null;
 }
 
 export interface Executor {
@@ -400,6 +407,17 @@ export function createExecutor(o: ExecContext): Executor {
       }
       case 'screenshot':
         return { ok: true, text: 'a screenshot of the page (with refs drawn on it) is attached below.' };
+      case 'login':
+        if (!o.vault) return { ok: false, text: 'Bitwarden logins are not turned on. Ask the user to sign in themselves.' };
+        return login(a, urlBefore, {
+          host,
+          vault: o.vault,
+          ask: s.vaultAsk !== false,
+          gate,
+          approve: o.ui.approve,
+          declined,
+          aborted: () => signal.aborted,
+        });
       case 'ask': {
         const ans = await o.ui.ask(a.text ?? '');
         return ans === null ? { ok: false, text: 'the user did not answer.' } : { ok: true, text: `the user answered: ${ans}` };

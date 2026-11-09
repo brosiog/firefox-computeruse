@@ -103,3 +103,8 @@ input, select { font: inherit; color: var(--fg); background: var(--card); border
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .actions { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .spacer { flex: 1; }
+
+fieldset.vault { border: 1px solid var(--line, #8884); border-radius: 6px; padding: 6px 10px; margin: 8px 0; }
+fieldset.vault legend { font-weight: 600; padding: 0 4px; }
+fieldset.vault .row { display: flex; gap: 6px; align-items: center; }
+fieldset.vault #vaultPw { flex: 1; min-width: 0; }

@@ -32,6 +32,14 @@ export interface Settings {
   historyBudget: number;
   /** Agent bridge hub (bridge/fcu.mjs) the sidebar connects to, so coding agents can use the browser. Empty: off. */
   bridgeUrl: string;
+  /** Opt-in: the agent may sign in with Bitwarden logins (through `bw serve`), without ever seeing them. */
+  vault: boolean;
+  /** The Bitwarden CLI's local API (`bw serve`). */
+  vaultUrl: string;
+  /** Ask in the sidebar before each fill (on by default; the site check applies either way). */
+  vaultAsk: boolean;
+  /** Coding agents on the bridge (and tasks they delegate) may use Bitwarden logins too. Off by default. */
+  vaultAgents: boolean;
   /** Benchmarks only: replaces the built-in system prompt. Not shown in the UI. */
   systemOverride?: string;
 }
@@ -83,6 +91,10 @@ export const DEFAULTS: Settings = {
   history: 'extend',
   historyBudget: 16000,
   bridgeUrl: 'http://127.0.0.1:47823',
+  vault: false,
+  vaultUrl: 'http://localhost:8087',
+  vaultAsk: true,
+  vaultAgents: false,
 };
 
 declare const browser: any;
