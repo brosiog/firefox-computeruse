@@ -40,14 +40,23 @@
           <select name="kind">
             <option value="openai">OpenAI-compatible (/v1/chat/completions)</option>
             <option value="ollama">Ollama native (/api/chat)</option>
+            <option value="chatgpt">ChatGPT plan (Sign in with ChatGPT)</option>
           </select>
         </label>
-        <label>Base URL <input name="baseUrl" type="url" required /></label>
+        <div id="chatgptBox" class="card" hidden>
+          <span class="row">
+            <button type="button" id="chatgptSignIn" class="primary">Continue with ChatGPT</button>
+            <button type="button" id="chatgptSignOut" hidden>Sign out</button>
+          </span>
+          <span id="chatgptStatus" class="hint"></span>
+          <p class="hint">Page text and screenshots go to OpenAI and count against your ChatGPT plan.</p>
+        </div>
+        <label id="baseUrlRow">Base URL <input name="baseUrl" type="url" required /></label>
         <label>Model
           <span class="row"><input name="model" list="models" /><button type="button" id="fetchModels">List</button></span>
           <datalist id="models"></datalist>
         </label>
-        <label>API key (optional) <input name="apiKey" type="password" autocomplete="off" /></label>
+        <label id="apiKeyRow">API key (optional) <input name="apiKey" type="password" autocomplete="off" /></label>
         <div class="grid">
           <label>Context window <input name="contextWindow" type="number" min="2048" step="1024" /></label>
           <label>Max steps <input name="maxSteps" type="number" min="1" max="200" /></label>

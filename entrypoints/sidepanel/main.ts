@@ -5,6 +5,7 @@ import { chat, listModels, modelInfo, prewarm, type Usage } from '../../src/llm/
 import { primer, systemPrompt } from '../../src/agent/prompt';
 import type { Gate } from '../../src/protocol';
 import { createBridgeHandler, startBridge } from '../../src/bridge';
+import { askBackground, type ChatGptStatus } from '../../src/llm/chatgpt-auth';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
 import { createVault, type Vault } from '../../src/vault';
 
@@ -352,7 +353,54 @@ function fill(s: Settings) {
   const match = Object.entries(PRESETS).find(([, p]) => p.baseUrl === s.baseUrl && p.kind === s.kind);
   presetSel.value = match?.[0] ?? '';
   $('presetHint').textContent = match?.[1].hint ?? '';
+  syncKind();
 }
+
+// ChatGPT plan: sign-in box instead of a server URL and key.
+const kindSel = form.elements.namedItem('kind') as HTMLSelectElement;
+function syncKind() {
+  const gpt = kindSel.value === 'chatgpt';
+  $('chatgptBox').hidden = !gpt;
+  $('baseUrlRow').hidden = gpt;
+  $('apiKeyRow').hidden = gpt;
+  if (gpt) {
+    (form.elements.namedItem('baseUrl') as HTMLInputElement).value = PRESETS.chatgpt.baseUrl;
+    void showChatGpt();
+  }
+}
+kindSel.addEventListener('change', syncKind);
+
+function renderChatGpt(st: ChatGptStatus) {
+  $('chatgptStatus').textContent = st.signedIn ? `Signed in${st.email ? ` as ${st.email}` : ''}` : 'Not signed in';
+  $('chatgptSignIn').hidden = st.signedIn;
+  $('chatgptSignOut').hidden = !st.signedIn;
+}
+async function showChatGpt() {
+  try {
+    renderChatGpt(await askBackground<ChatGptStatus>({ type: 'chatgpt-status' }));
+  } catch (e) {
+    $('chatgptStatus').textContent = (e as Error).message;
+  }
+}
+$('chatgptSignIn').onclick = async () => {
+  $('chatgptStatus').textContent = 'finish signing in in the new tab…';
+  try {
+    renderChatGpt(await askBackground<ChatGptStatus>({ type: 'chatgpt-signin' }));
+    // Offer the account's models right away; the first listed one is a sensible default.
+    $<HTMLButtonElement>('fetchModels').click();
+  } catch (e) {
+    $('chatgptStatus').textContent = (e as Error).message;
+  }
+};
+$('chatgptSignOut').onclick = async () => {
+  try {
+    const { revoked } = await askBackground<{ revoked: boolean }>({ type: 'chatgpt-signout' });
+    renderChatGpt({ signedIn: false });
+    if (!revoked) $('chatgptStatus').textContent = 'Signed out here; OpenAI did not confirm the revocation. You can disconnect the app in ChatGPT Settings.';
+  } catch (e) {
+    $('chatgptStatus').textContent = (e as Error).message;
+  }
+};
 
 function read(): Settings {
   const s: any = { ...settings };
@@ -371,6 +419,8 @@ presetSel.onchange = () => {
   const p = PRESETS[presetSel.value];
   if (!p) return;
   const s = read();
+  // A model name from another provider means nothing here.
+  if (!p.model && p.kind !== s.kind) s.model = '';
   s.kind = p.kind;
   s.baseUrl = p.baseUrl;
   if (p.model) s.model = p.model;
@@ -494,6 +544,16 @@ function connectBridge() {
 async function refreshStatus() {
   statusBtn.textContent = settings.model || 'no model';
   statusBtn.className = 'pill';
+  if (settings.kind === 'chatgpt') {
+    try {
+      const st = await askBackground<ChatGptStatus>({ type: 'chatgpt-status' });
+      statusBtn.classList.add(st.signedIn ? 'ok' : 'bad');
+      statusBtn.title = st.signedIn ? `ChatGPT plan${st.email ? ` (${st.email})` : ''}` : 'Not signed in to ChatGPT: open Settings';
+    } catch {
+      statusBtn.classList.add('bad');
+    }
+    return;
+  }
   try {
     const base = settings.baseUrl.replace(/\/+$/, '');
     const url = settings.kind === 'ollama' ? `${base}/api/tags` : `${base}/models`;

@@ -18,9 +18,9 @@ const EXPECT = {
   geckoId: 'firefox-computeruse@local',
   permissions: ['scripting', 'storage', 'tabs', 'webNavigation', 'webRequest', 'webRequestBlocking'],
   hostPermissions: ['<all_urls>'],
-  // Total bytes in dist/. ~123 kB with the prompt-injection defenses and Bitwarden logins (sign-in field finder,
-  // redaction); the budget leaves room to grow, not to double.
-  maxBytes: 130_000,
+  // Total bytes in dist/. ~137 kB: main is ~114 kB (prompt-injection defenses, Sign in with ChatGPT) and Bitwarden
+  // logins add ~23 kB (sign-in field finder, redaction, vault client). The budget leaves room to grow, not to double.
+  maxBytes: 140_000,
 };
 // Strings that only exist in the test-only code paths of entrypoints/background.ts (tree-shaken from release builds).
 const TEST_HOOK_MARKERS = ['/e2e/next', 'sidepanel.html?tabUrl='];

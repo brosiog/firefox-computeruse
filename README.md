@@ -34,6 +34,7 @@ website access, the sidebar shows an *Allow on all sites* button.
 | MLX (`mlx_lm.server`) | `http://localhost:8080/v1` | |
 | Ollama | native `/api/chat`, `http://localhost:11434` | Sends `num_ctx`, `keep_alive` and `think`. No `OLLAMA_ORIGINS` setup needed (see below). |
 | Other | any `/v1/chat/completions` | Optional API key; models are listed from `/models`. |
+| **ChatGPT plan** | Responses API, `https://api.openai.com/v1` | *Continue with ChatGPT* in Settings; runs on your ChatGPT subscription. See below. |
 
 The client tries optional features and drops each one the server rejects, remembering the result per server and model:
 
@@ -49,6 +50,31 @@ Two Firefox issues are fixed for LAN servers:
   `http://192.168.x.x` to `https://` and breaks every plain-HTTP server that isn't on localhost. The manifest overrides it.
 - Ollama rejects `moz-extension://` origins. The background page removes the `Origin` header, but only on the
   extension's own requests to the configured model server.
+
+## ChatGPT plan (Sign in with ChatGPT)
+
+Pick **ChatGPT plan** in Settings and choose *Continue with ChatGPT*. A tab opens on OpenAI's sign-in. After you
+approve, the extension lists the models your plan offers and the agent runs on your ChatGPT subscription. This is
+OpenAI's [open-source token-sharing flow](https://developers.openai.com/siwc/token-sharing-open-source) against the
+public Responses API, not ChatGPT's private backend.
+
+- **Redirect.** The flow redirects to `http://127.0.0.1:<port>/auth/callback`. The extension doesn't listen on that
+  port. The background page sees the sign-in tab navigate there (`webRequest`), takes the code, cancels the request and
+  closes the tab.
+- **Checks.** Sign-in uses PKCE, `state` and `nonce`. The ID token's signature is checked against OpenAI's JWKS, along
+  with its issuer, audience and expiry. Sign-in fails unless the `chatgpt.tokens.use.direct` scope is granted.
+- **Tokens.** Tokens stay in `storage.local` under `chatgptAuth`, separate from settings. They are refreshed in the
+  background page only, so several sidebars never race a rotating refresh token. *Sign out* revokes the refresh token.
+- **Requests.** Every request sends `store: false` and `stream: true`, and the system prompt goes in `instructions`.
+  `temperature` and output caps aren't accepted on this route. Reasoning effort and structured output are still tried
+  and dropped when the model rejects them.
+- **No prewarm.** There's nothing to load, and the route can't cap a reply at one token.
+- **Your data.** Page text, and screenshots when vision is on, go to OpenAI and count against your plan's usage.
+
+**Claude subscriptions.** Anthropic doesn't allow third-party apps to sign in with a Claude.ai account or use its plan
+limits. That includes apps built on the Claude Agent SDK, which needs an API key. To use a Claude plan with this
+browser, drive it from Claude Code itself through the [agent bridge](#coding-agents-mcp-and-cli). The browser
+becomes a tool of Claude Code, which runs under your own login.
 
 ## What makes it efficient for small models
 
