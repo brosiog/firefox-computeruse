@@ -1,11 +1,14 @@
 import { defineBackground } from 'wxt/utils/define-background';
+import { handleChatGptMessage } from '../src/llm/chatgpt-auth';
 
 declare const browser: any;
 
 // The background is deliberately tiny: the agent runs in the sidebar page, which stays alive while it is open.
-// Two jobs here:
+// Three jobs here:
 // 1. The toolbar button toggles the sidebar.
-// 2. Local model servers (Ollama, Splash) reject requests whose Origin is moz-extension://. The Origin header is
+// 2. Sign in with ChatGPT: the sign-in tab and token refreshes live here, so several sidebars never race a rotating
+//    refresh token (src/llm/chatgpt-auth.ts).
+// 3. Local model servers (Ollama, Splash) reject requests whose Origin is moz-extension://. The Origin header is
 //    removed from the extension's own requests so no server-side origin allow-list is needed.
 export default defineBackground(() => {
   // e2e/bench builds only (WXT_E2E_URL set at build time): a job loop. For each job from the fixture server: set the
@@ -19,6 +22,8 @@ export default defineBackground(() => {
   browser.action.onClicked.addListener(() => {
     browser.sidebarAction.toggle();
   });
+
+  browser.runtime.onMessage.addListener((m: unknown) => handleChatGptMessage(m));
 
   // Every request the extension's own pages make (model servers, model lists) goes out without an Origin header.
   // Gating this on the configured server's origin raced with settings changes: the bench caught Splash answering

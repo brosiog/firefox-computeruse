@@ -103,3 +103,8 @@ input, select { font: inherit; color: var(--fg); background: var(--card); border
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .actions { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .spacer { flex: 1; }
+
+/* Author display rules (dialog label, .card) would otherwise beat the hidden attribute. */
+[hidden] { display: none !important; }
+#chatgptBox .row { margin-top: 0; }
+#chatgptBox p { margin: 6px 0 0; }
