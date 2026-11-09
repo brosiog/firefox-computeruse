@@ -28,8 +28,8 @@
     "happy-dom": "^21.0.4",
     "puppeteer-core": "25.16.0",
     "typescript": "7.0.2",
-    "vitest": "5.0.5",
-    "wxt": "0.21.4"
+    "vitest": "5.1.0",
+    "wxt": "0.21.5"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
