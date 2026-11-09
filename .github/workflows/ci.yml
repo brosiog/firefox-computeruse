@@ -63,13 +63,13 @@ jobs:
       - name: Prompt lint (no bench vocabulary in the system prompt)
         run: pnpm bench:lint
 
-      - name: Package
+      - name: Package (after check-build: the zip lands in dist/)
         run: pnpm zip
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: extension-${{ github.sha }}
-          path: .output/*.zip
+          path: dist/*-firefox.zip
           if-no-files-found: error
           retention-days: 14
 
