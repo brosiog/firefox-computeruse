@@ -4,11 +4,13 @@ import { defineConfig } from 'wxt';
 // sidebar_action for the panel, scripting API for the probe).
 // The e2e build (pnpm e2e) bakes in a fixture server URL; it goes to .output/e2e so dist/ stays a clean build.
 const e2e = !!process.env.WXT_E2E_URL;
+// pnpm e2e:bridge: the normal extension plus a hook that opens the panel as a tab on that page (WXT_BRIDGE_TEST).
+const bridgeTest = !!process.env.WXT_BRIDGE_TEST;
 
 export default defineConfig({
   browser: 'firefox',
   manifestVersion: 3,
-  outDir: e2e ? '.output/e2e' : 'dist',
+  outDir: e2e ? '.output/e2e' : bridgeTest ? '.output/e2e-bridge' : 'dist',
   outDirTemplate: '',
   imports: false,
   manifest: {
