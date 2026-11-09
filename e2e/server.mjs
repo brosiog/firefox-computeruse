@@ -216,7 +216,7 @@ function model(req, res) {
     const flat = j.messages.map(m => `<${m.role}>${textOf(m.content)}`).join('');
     const prev = state.requests[state.requests.length - 1];
     const cached = prev ? sharedPrefix(prev.flat, flat) : 0;
-    state.requests.push({ flat, response_format: j.response_format?.type, reasoning_effort: j.reasoning_effort });
+    state.requests.push({ flat, response_format: j.response_format?.type, reasoning_effort: j.reasoning_effort, max_tokens: j.max_tokens });
     if (prev) state.prefixShare.push(cached / flat.length);
     const action = policy(j.messages);
     const text = JSON.stringify(action);

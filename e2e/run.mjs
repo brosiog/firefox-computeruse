@@ -65,7 +65,8 @@ try {
   if (!realModel) {
     checks.push(
       ['moz-extension Origin never reached the model server', state.originRejected === 0],
-      ['json_schema structured output requested', state.requests.every(r => r.response_format === 'json_schema')],
+      // Prewarm requests (max_tokens 1) carry no schema by design; every agent step must.
+      ['json_schema structured output requested', state.requests.some(r => r.max_tokens !== 1) && state.requests.filter(r => r.max_tokens !== 1).every(r => r.response_format === 'json_schema')],
       ['reasoning_effort "none" sent', state.requests.every(r => r.reasoning_effort === 'none')],
     );
   }

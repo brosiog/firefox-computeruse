@@ -128,8 +128,24 @@ The e2e task is "find the cheapest USB hub, order 2 for Ada Lovelace, report the
 - a **cross-origin payment iframe**
 - the payment approval
 
-The e2e needs a Firefox build in `e2e/.cache/firefox` (download it from Mozilla) or set `FIREFOX=/path/to/firefox`. It
-builds a separate copy into `.output/e2e` with a test hook baked in. `dist/` never contains that hook.
+The e2e needs a Firefox build in `e2e/.cache/firefox` (`scripts/fetch-firefox.sh` downloads the pinned release and
+verifies its checksum) or set `FIREFOX=/path/to/firefox`. It builds a separate copy into `.output/e2e` with a test hook
+baked in. `dist/` never contains that hook, and `pnpm check:build` fails if it ever does.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every PR and on pushes to `main`. Its two jobs run in parallel:
+
+- **checks**: frozen-lockfile install, `node --check` on every `.mjs`, type-check, unit tests, release build,
+  `scripts/check-build.mjs` (manifest, exact permissions, CSP, referenced files, no test hooks or sourcemaps, size
+  budget, bridge uses Node built-ins only), Mozilla's add-on linter (`scripts/lint-addon.mjs`: errors and new warnings
+  fail), prompt lint, and the packaged zip as a build artifact. `pnpm check` runs the same steps locally.
+- **firefox**: pinned Firefox, `pnpm e2e`, `pnpm e2e:bridge`, and the oracle bench over every family and perturbation
+  with `--min-pass 1`. Anything below 100% means the extension or harness is broken. The bench report goes to the job
+  summary, and on failure the traces are uploaded as an artifact.
+
+Permission, CSP and size-budget changes are deliberate: update the expectation in `scripts/check-build.mjs` in the
+same PR.
 
 Measured on 2026-11-07, with Firefox 159 headless on the devbox and Splash 1.6 serving Qwen3.8-27B-4bit on the Mac:
 
