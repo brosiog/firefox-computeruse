@@ -250,8 +250,43 @@ export function flatChildren(node: Element | ShadowRoot | Document): Node[] {
 export function isRenderedStyle(style: CSSStyleDeclaration): boolean {
   if (style.display === 'none') return false;
   if (style.contentVisibility === 'hidden') return false;
-  if (style.opacity === '0') return false;
+  if (style.opacity !== '' && Number(style.opacity) < 0.1) return false;
   return true;
+}
+
+/**
+ * Rendered but not visible to a person: microscopic text, clipped-away boxes, boxes positioned off the document.
+ * Hidden page text is the main channel for prompt injection (instructions only an agent reads), so such subtrees are
+ * not shown to the model at all. This drops screen-reader-only text too, which costs little.
+ */
+export function visuallyHidden(el: Element, style: CSSStyleDeclaration, rect: DOMRect, win: Window): boolean {
+  const fs = parseFloat(style.fontSize);
+  if (fs > 0 && fs < 4) return true;
+  const clip = style.clip;
+  if (clip && clip !== 'auto' && /rect\(\s*(0|1)(px)?[ ,]+(0|1)(px)?/.test(clip)) return true;
+  const cp = style.clipPath;
+  if (cp && /inset\(\s*(50|100)%/.test(cp)) return true;
+  if (testLayout()) return false;
+  const pos = style.position;
+  if (pos === 'absolute' || pos === 'fixed') {
+    const doc = el.ownerDocument;
+    const dw = Math.max(doc.documentElement.scrollWidth, win.innerWidth);
+    if (rect.right + win.scrollX < 0 || rect.bottom + win.scrollY < 0 || rect.left + win.scrollX > dw) return true;
+  }
+  if (rect.width <= 2 && rect.height <= 2 && (style.overflow === 'hidden' || style.overflowX === 'hidden')) return true;
+  return false;
+}
+
+const TRANSPARENT = /^(transparent|rgba\(\s*0,\s*0,\s*0,\s*0\s*\))$/;
+
+/** Text drawn in its own background colour (nearest opaque background up the tree). */
+export function sameColorAsBackground(el: Element, win: Window): boolean {
+  const color = win.getComputedStyle(el).color;
+  for (let p: Element | null = el, i = 0; p && i < 8; p = p.parentElement, i++) {
+    const bg = win.getComputedStyle(p).backgroundColor;
+    if (bg && !TRANSPARENT.test(bg)) return bg === color;
+  }
+  return false;
 }
 
 export function shownSelf(el: Element, style: CSSStyleDeclaration, rect: DOMRect): boolean {

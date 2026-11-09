@@ -1,8 +1,9 @@
 // One pass over the rendered DOM (flat tree, shadow roots included) producing ordered items: controls, headings,
 // text runs, landmarks and frame placeholders, each tagged with where it sits relative to the viewport.
 
+import { looksInjected } from './inject';
 import {
-  SKIP_TAGS, isBlock, clean, flatChildren, isNativeInteractive, isRenderedStyle, landmarkOf, nameOf, roleOf, shownSelf,
+  SKIP_TAGS, isBlock, visuallyHidden, sameColorAsBackground, clean, flatChildren, isNativeInteractive, isRenderedStyle, landmarkOf, nameOf, roleOf, shownSelf,
   stateOf, testLayout,
 } from './dom';
 
@@ -21,6 +22,10 @@ export interface Item {
   frameId?: number;
   /** Inside site chrome (nav, header, footer, aside): budgeted after the main content. */
   chrome?: boolean;
+  /** For text items: the element the text came from (taint tracking). */
+  host?: Element;
+  /** The line reads as written to an AI agent (prompt injection). */
+  flag?: boolean;
 }
 
 export interface WalkResult {
@@ -56,10 +61,12 @@ export function walk(root: Element, opts: WalkOptions): WalkResult {
   let buf = '';
   let bufZone: Zone = Zone.In;
   let bufChrome = false;
+  let bufHost: Element | null = null;
   let chromeDepth = 0;
   let mainDepth = 0;
   // visibility is inherited and can be overridden by descendants; text follows its parent element's computed value.
   const hiddenVis = new WeakSet<Element>();
+  const invisibleText = new WeakMap<Element, boolean>();
   const inMain = new WeakSet<Item>();
   const push = (it: Item) => {
     if (chromeDepth > 0) it.chrome = true;
@@ -82,7 +89,7 @@ export function walk(root: Element, opts: WalkOptions): WalkResult {
     if (t.length < 2 || !/[\p{L}\p{N}]/u.test(t)) return;
     const prev = items[items.length - 1];
     if (prev && (prev.line === t || (prev.kind === 'el' && prev.line.includes(`"${t}"`)))) return;
-    push({ kind: 'text', zone: bufZone, line: t, chrome: bufChrome || undefined });
+    push({ kind: 'text', zone: bufZone, line: t, chrome: bufChrome || undefined, host: bufHost ?? undefined });
   };
 
   const visit = (node: Node, inControl: boolean, parentPointer: boolean) => {
@@ -90,12 +97,18 @@ export function walk(root: Element, opts: WalkOptions): WalkResult {
       if (inControl) return;
       const pe = (node as Text).parentElement;
       if (pe && hiddenVis.has(pe)) return;
+      if (pe && layout) {
+        let inv = invisibleText.get(pe);
+        if (inv === undefined) invisibleText.set(pe, (inv = sameColorAsBackground(pe, win)));
+        if (inv) return;
+      }
       const v = node.nodeValue;
       if (!v) return;
       if (!buf) {
         const p = (node as Text).parentElement;
         bufZone = p ? zoneOf(p.getBoundingClientRect()) : Zone.In;
         bufChrome = chromeDepth > 0;
+        bufHost = (node as Text).parentElement;
       }
       buf += v;
       return;
@@ -110,6 +123,7 @@ export function walk(root: Element, opts: WalkOptions): WalkResult {
     const style = win.getComputedStyle(el);
     if (!style || !isRenderedStyle(style)) return;
     const rect = el.getBoundingClientRect();
+    if (visuallyHidden(el, style, rect, win)) return;
 
     // Far off-screen subtrees: count their controls cheaply instead of walking them.
     if (layout && !opts.full && rect.height > 0 && style.position !== 'fixed' && style.position !== 'sticky') {
@@ -216,6 +230,7 @@ export function walk(root: Element, opts: WalkOptions): WalkResult {
   flush();
   // With a main landmark on the page, everything outside it is chrome too (unlabelled sidebars, promo blocks).
   if (items.some(it => inMain.has(it))) for (const it of items) if (!inMain.has(it)) it.chrome = true;
+  markInjection(items, root);
   return { items, scroller, skippedBelow, skippedAbove };
 }
 
@@ -225,4 +240,48 @@ function visiblyRendered(el: Element, win: Window): boolean {
   if (testLayout()) return true;
   const r = el.getBoundingClientRect();
   return r.width >= 4 && r.height >= 4;
+}
+
+const CONTAINERS = 'li,dd,td,th,blockquote,section,article,aside,form,dialog,[role=dialog],[role=alertdialog],fieldset,div';
+const CONTROLS = 'a[href],button,input,select,textarea,[contenteditable=true],[role=button],[role=link],[role=switch],[role=checkbox],[role=radio],[role=menuitem],[role=tab],[role=option],[role=combobox],[onclick]';
+
+/**
+ * Flags lines that read as written to an AI agent, and taints the controls that share a block with them (a link inside
+ * an injected paragraph, the buttons of an injected dialog). Tainted controls need the user's approval to act on.
+ */
+export function markInjection(items: Item[], root: Element): void {
+  const blocks = new Set<Element>();
+  for (const it of items) {
+    if (it.kind !== 'text' && it.kind !== 'head' && it.kind !== 'el') continue;
+    // Element lines are `role "name" state`: test the name itself too, so an instruction in an aria-label is caught
+    // by patterns anchored at the start of a sentence.
+    const name = it.kind === 'el' ? (/^\S+ "([^"]*)"/.exec(it.line)?.[1] ?? '') : '';
+    if (!looksInjected(it.line) && !(name && looksInjected(name))) continue;
+    it.flag = true;
+    const own = it.kind === 'el' ? it.el : it.host;
+    if (!own) continue;
+    blocks.add(own);
+    // The container around the injected text (its links, a dialog's buttons), when it is small enough to be one
+    // unit; a page-wide wrapper is not tainted, or every control on the page would need approval.
+    // Only when the injected text is most of that container: a page section (or a whole app shell) that merely
+    // contains an injected line must not drag its legitimate controls (pagination, submit) under approval.
+    const c = (own.parentElement ?? own).closest(CONTAINERS);
+    const flaggedLen = (it.kind === 'el' ? name || it.line : own.textContent ?? it.line).trim().length;
+    const cLen = (c?.textContent ?? '').trim().length;
+    // On a small page the injected text can be half of everything, so a share alone is not enough: the rest of the
+    // container must be little more than a caption ("Guest comment", "Close"), and it must not hold a heading (a
+    // heading means a page section, not one injected block).
+    const rest = cLen - flaggedLen;
+    if (c && c !== root && c !== root.ownerDocument.body && c.querySelectorAll(CONTROLS).length <= 4 && cLen > 0 && flaggedLen / cLen >= 0.5 && rest <= 80 && !c.querySelector('h1,h2,h3,h4,[role=heading]')) blocks.add(c);
+  }
+  if (!blocks.size) return;
+  for (const it of items) {
+    if (it.kind !== 'el' || !it.el) continue;
+    for (let p: Element | null = it.el; p && p !== root; p = p.parentElement) {
+      if (blocks.has(p)) {
+        it.flag = true;
+        break;
+      }
+    }
+  }
 }
