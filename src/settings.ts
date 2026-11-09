@@ -1,4 +1,4 @@
-export type ProviderKind = 'ollama' | 'openai';
+export type ProviderKind = 'ollama' | 'openai' | 'chatgpt';
 export type ApprovalMode = 'ask' | 'auto';
 export type Structured = 'auto' | 'schema' | 'json' | 'off';
 export type Effort = 'default' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -47,6 +47,14 @@ export interface Preset {
 }
 
 export const PRESETS: Record<string, Preset> = {
+  chatgpt: {
+    label: 'ChatGPT plan (Sign in with ChatGPT)',
+    kind: 'chatgpt',
+    baseUrl: 'https://api.openai.com/v1',
+    contextWindow: 128000,
+    history: 'extend',
+    hint: 'Uses your ChatGPT subscription. Sign in below, then pick a model.',
+  },
   splash: {
     label: 'Splash (LAN Mac)',
     kind: 'openai',
