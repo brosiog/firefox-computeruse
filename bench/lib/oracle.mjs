@@ -42,6 +42,11 @@ export const named = (role, name) => new RegExp(`^${role} "${quote(name)}"`, 'i'
 /** Generic interruptions every family inherits: the popup perturbation's dialog. */
 export function interruptions(v, job) {
   if (/\(no visible content\)|page is still loading/.test(v.user) && !v.els.length) return { act: { tool: 'wait', seconds: 1 }, accept: [{ tool: 'wait' }] };
+  // Dialogs that are not part of the task (injected notices): close them.
+  if (v.modal && /Notice/i.test(v.modal)) {
+    const close = ref(v, /^button "Close"/i);
+    if (close) return { act: { tool: 'click', ref: close }, accept: [{ tool: 'click', ref: close }, { tool: 'key', key: /escape/i }] };
+  }
   if (v.modal && /Newsletter/i.test(v.modal)) {
     const words = job.ctx.pool.dismiss.map(quote).join('|');
     const close = ref(v, new RegExp(`^button "(${words})"`, 'i'));

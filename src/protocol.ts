@@ -17,7 +17,8 @@ export type ProbeCmd =
   | { op: 'marks'; show: boolean };
 
 /** What a consequential action is, decided in the page before anything is dispatched. */
-export type Risk = 'read' | 'write' | 'delete' | 'pay' | 'secret';
+/** exfil: sending a form to another site than the page's; suspicious: acting on page text aimed at the agent. */
+export type Risk = 'read' | 'write' | 'delete' | 'pay' | 'secret' | 'exfil' | 'suspicious';
 
 export interface Gate {
   risk: Risk;
@@ -31,6 +32,8 @@ export interface ProbeOk {
   msg: string;
   /** Present when the action wants the host to open a URL itself (target=_blank links). */
   openUrl?: string;
+  /** URLs of links shown so far in this document (navigation provenance). */
+  links?: string[];
 }
 
 export interface ProbeErr {
@@ -57,5 +60,8 @@ export interface Snapshot {
   vw: number;
   vh: number;
   hidden: { above: number; below: number; dropped: number; chrome?: number };
+  links: string[];
+  /** Lines that read as written to AI agents (shown with ⚠). */
+  flagged?: number;
   modal: string | null;
 }

@@ -103,9 +103,78 @@ Firefox has no `chrome.debugger`/CDP, so this replaces Nanobrowser's whole contr
   - Payments and passwords ask in both modes.
   - Search forms, consent banners and plain navigation links never ask.
 - **Page text is data.** Page text reaches the model inside `<page>…</page>`, and the system prompt says it is data, not
-  instructions.
+  instructions. See [Prompt-injection defenses](#prompt-injection-defenses).
 - **Vision (optional).** For vision models there is a `screenshot` tool that draws refs on the page (set-of-marks),
   downscaled to 1024 px JPEG. Splash reports `vision: true` for Qwen3.8; turn it on in Settings to use it.
+
+## Prompt-injection defenses
+
+A prompt alone does not stop a small model from following instructions written on a web page. So, following the
+"constrain actions after untrusted input" design pattern (Beurer-Kellner et al., 2025), the defenses here are
+deterministic checks in the probe and the agent loop. None of them costs a model call.
+
+- **Boundary integrity.** Everything the page controls (text, title, tab titles, dialog labels) sits inside `<page>…</page>`.
+  Page text that tries to close the fence (`</page>`) is neutralized.
+- **Hidden text is dropped.** Text a person can't see never reaches the model: tiny fonts, clipped or off-screen boxes,
+  text the same colour as its background, `opacity` near 0, and HTML comments.
+- **Injection detector.** Lines written to AI agents ("note for AI assistants", "ignore your previous instructions",
+  fake `SYSTEM:` and chat-template tokens, several languages) are marked `⚠`. The page header then says how many there are
+  and that they are not from the user. The detector also tests accessible names, so an instruction hidden in an
+  `aria-label` is caught.
+- **Taint and approval.** Controls that belong to an injected block (its links, an injected dialog's buttons) need the
+  user's approval, in every mode. Closing a dialog never does. The taint stays local: it spreads to a container only when
+  the injection is nearly all of that container, so a page's own Save or Next button is never caught.
+- **Navigation provenance.** The agent can only type a URL that a page offered as a link, that is on the same site, or
+  that the user named in the task. A URL carrying data to a third party is blocked with an explanation.
+- **Cross-site actions need approval.** A form that submits to another site (`exfil`), and a link inside a frame from
+  another site (ads, "sponsored" boxes), ask first. Frames from another site are labelled as such in the page text.
+- **Planted answers.** A final answer that repeats a code-like token taken from page text telling the agent what to
+  answer is sent back once. A confirmation number the page simply shows is not affected.
+- **Declines are not dead ends.** When the user (or the bench) declines one of these requests, the agent is told it came
+  from the page and continues the user's task.
+
+Benchmark and results: [bench/README.md](bench/README.md#security-prompt-injection).
+
+## Coding agents (MCP and CLI)
+
+`bridge/fcu.mjs` connects coding agents to the browser. It is one Node file with no dependencies. The sidebar
+long-polls it on `127.0.0.1:47823`; set this in *Settings → Agent bridge*, or leave the field empty to turn it off. An
+**agents** pill shows in the header while an agent is connected. Agents get three tools:
+
+| Tool | What it does |
+| --- | --- |
+| `browser_observe` | The current tab as compact text with refs; optionally a screenshot. |
+| `browser_act` | One or more actions (same vocabulary as the built-in agent), then the new page state in the same reply. |
+| `browser_task` | Hands a whole chore to the extension's local-model agent and returns its answer. It's cheap on the caller's context. |
+
+Actions run with the same probe and approval gates as the built-in agent. Submits, sends, deletes, payments and
+passwords wait for **Allow once** in the sidebar, and each agent action is listed in the sidebar log.
+
+```sh
+# Claude Code
+claude mcp add firefox -- node /path/to/firefox-computeruse/bridge/fcu.mjs
+# Codex (~/.codex/config.toml)
+[mcp_servers.firefox]
+command = "node"
+args = ["/path/to/firefox-computeruse/bridge/fcu.mjs"]
+# Hermes (~/.hermes/config.yaml)
+mcp_servers:
+  firefox: { command: node, args: ["/path/to/firefox-computeruse/bridge/fcu.mjs"] }
+```
+
+pi has no MCP support. Use the CLI instead: copy `bridge/SKILL.md` into its skills directory, or paste it into
+`AGENTS.md`. Any harness that can run shell commands can use the CLI the same way:
+
+```sh
+node bridge/fcu.mjs status
+node bridge/fcu.mjs observe [--shot page.jpg]
+node bridge/fcu.mjs act '[{"tool":"type","ref":"5","text":"usb hub","enter":true}]'
+node bridge/fcu.mjs task "find the cheapest USB-C hub here and report its price"
+```
+
+Several harnesses can run at once. The first bridge process becomes the hub, and later ones relay through it. If the
+hub's process exits, the next call takes over the port. Commands run one at a time. The hub refuses web pages: it
+requires an `x-fcu` header (which needs a CORS preflight it never grants), a loopback `Host`, and no foreign `Origin`.
 
 ## Development
 
@@ -113,6 +182,7 @@ Firefox has no `chrome.debugger`/CDP, so this replaces Nanobrowser's whole contr
 pnpm test           # unit tests (vitest + happy-dom): probe, parser, prompt-cache invariants, agent loop
 pnpm type-check
 pnpm e2e            # real headless Firefox + fixture shop + scripted OpenAI-compatible fake model
+pnpm e2e:bridge     # real headless Firefox driven through bridge/fcu.mjs (CLI)
 MODEL_URL=http://192.168.86.202:8000/v1 MODEL=qwen3.8-27b-splash pnpm e2e   # same task, real model
 ```
 
@@ -164,6 +234,8 @@ src/probe/    perception (walk, snapshot, read, find) and actions, gating
 src/agent/    loop, prompt/history, tools + tolerant parser
 src/llm/      streaming client: OpenAI-compatible + Ollama native
 src/browser/  host: tabs, frames, navigation, screenshots
+src/bridge.ts agent bridge, extension side (poll loop, observe/act/task)
+bridge/       fcu.mjs: MCP stdio server + CLI + localhost hub; SKILL.md for CLI-only harnesses
 e2e/          fixture shop, fake model, Firefox runner
 ```
 
@@ -173,6 +245,7 @@ e2e/          fixture shop, fake model, Firefox runner
 - File uploads (Firefox can't set file inputs from an extension without a native helper), and drag and drop.
 - Real trusted input (`isTrusted` events). That would need a native-messaging helper driving Firefox over WebDriver BiDi,
   which only matters for the few sites that check.
-- Persisted conversations, follow-up messages in the same run, and an MCP bridge.
+- Persisted conversations and follow-up messages in the same run.
+- Injection in screenshots (vision mode) is not covered by the text detector; VPI-Bench-style visual attacks are untested.
 - No checks yet with a real Firefox on macOS, only headless Firefox on Linux. The extension has no platform-specific code
   apart from the `MacCtrl` shortcut.

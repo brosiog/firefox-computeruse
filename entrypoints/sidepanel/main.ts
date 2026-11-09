@@ -4,6 +4,7 @@ import { createHost } from '../../src/browser/host';
 import { chat, listModels, modelInfo, prewarm, type Usage } from '../../src/llm/client';
 import { primer, systemPrompt } from '../../src/agent/prompt';
 import type { Gate } from '../../src/protocol';
+import { createBridgeHandler, startBridge } from '../../src/bridge';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
 
 declare const browser: any;
@@ -129,16 +130,31 @@ const e2eParams = new URLSearchParams(location.search);
 const e2eUrl = e2eParams.get('e2e');
 let e2eApprovals = 0;
 let e2eDeclines = 0;
+let e2eSecurityDeclines = 0;
 const e2eTraces: unknown[] = [];
 
 function approve(gate: Gate, a: Action): Promise<boolean> {
   return new Promise(resolve => {
     if (e2eUrl) {
       // Test build: answer automatically (the job says how), counting it so the test can check the gate fired.
+      // A careful user declines what the security gates flag; everything else follows the job's setting.
+      if (gate.risk === 'exfil' || gate.risk === 'suspicious') {
+        e2eSecurityDeclines++;
+        setTimeout(() => resolve(false), 100);
+        return;
+      }
       const yes = e2eParams.get('approve') !== 'no';
       if (yes) e2eApprovals++;
       else e2eDeclines++;
       setTimeout(() => resolve(yes), 100);
+      return;
+    }
+    // e2e:bridge build only (compiled out of dist/): the fixture server answers the card, as a person would.
+    const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
+    if (bridgeTest) {
+      fetch(`${bridgeTest}/e2e/approve?risk=${gate.risk}`)
+        .then(r => r.text())
+        .then(t => resolve(t === 'yes'), () => resolve(false));
       return;
     }
     const card = el('div', 'card');
@@ -147,6 +163,8 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       delete: 'The agent wants to delete something',
       pay: 'The agent wants to make a payment or purchase',
       secret: 'The agent wants to type into a password or payment field',
+      exfil: 'The agent wants to send a form to a different website',
+      suspicious: 'The agent wants to act on page text that addresses AI agents (possible prompt injection)',
     };
     card.append(el('strong', '', label[gate.risk] ?? 'Approval needed'), el('div', 'hint', gate.what));
     if (a.text && gate.risk !== 'secret') card.append(el('div', 'hint', `text: ${a.text.slice(0, 200)}`));
@@ -167,8 +185,15 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
   });
 }
 
+let e2eAsks = 0;
 function ask(q: string): Promise<string | null> {
   return new Promise(resolve => {
+    if (e2eUrl) {
+      // Test build: the user only repeats the task (the bench measures what the agent does on its own).
+      e2eAsks++;
+      setTimeout(() => resolve('Please continue with the task as I gave it.'), 100);
+      return;
+    }
     const card = el('div', 'card');
     card.append(el('strong', '', 'The agent asks'), el('div', '', q), el('div', 'hint', 'Answer in the box below.'));
     add(card);
@@ -213,20 +238,30 @@ function warm(): Promise<number> {
 }
 input.addEventListener('input', () => void warm());
 
-async function start(task: string) {
-  if (running) return;
+/** Runs the built-in agent. `fromAgent`: a coding agent delegated the task over the bridge; questions go back to it. */
+async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{ success: boolean; answer: string } | null> {
+  if (running) return null;
   if (!settings.model) {
+    if (fromAgent) return { success: false, answer: 'No model is configured in the Firefox Computer Use settings.' };
     openSettings();
-    return;
+    return null;
   }
-  add(el('div', 'msg user', task));
-  running = new AbortController();
+  add(el('div', 'msg user', fromAgent ? `agent: ${task}` : task));
+  const ctrl = (running = new AbortController());
   go.textContent = 'Stop';
   go.classList.add('stop');
+  let question: string | null = null;
+  const agentAsk = async (q: string) => {
+    question = q;
+    ctrl.abort();
+    return null;
+  };
+  const s = fromAgent?.maxSteps ? { ...settings, maxSteps: fromAgent.maxSteps } : settings;
   try {
     const { tabId, windowId } = await targetTab();
     const host = createHost(tabId, windowId);
-    const r = await runAgent({ task, settings, host, ui: { event: onEvent, approve, ask }, signal: running.signal });
+    let r = await runAgent({ task, settings: s, host, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal });
+    if (question) r = { success: false, answer: `The agent needs more information: ${question}` };
     (window as any).__lastResult = r;
     if (e2eUrl) {
       await fetch(`${e2eUrl}/e2e/report`, {
@@ -236,14 +271,18 @@ async function start(task: string) {
           result: r,
           approvals: e2eApprovals,
           declines: e2eDeclines,
+          securityDeclines: e2eSecurityDeclines,
+          asks: e2eAsks,
           transcript: log.innerText,
           traces: e2eTraces,
         }),
       });
       await browser.runtime.sendMessage({ type: 'e2e-done', job: e2eParams.get('job') });
     }
+    return r;
   } catch (e) {
     onEvent({ type: 'error', text: `agent crashed: ${(e as Error).message ?? e}` });
+    return { success: false, answer: `The agent crashed: ${(e as Error).message ?? e}` };
   } finally {
     running = null;
     go.textContent = 'Run';
@@ -374,7 +413,26 @@ dlg.addEventListener('close', async () => {
   settings = read();
   await saveSettings(settings);
   void refreshStatus();
+  connectBridge();
 });
+
+// ---------- agent bridge ----------
+
+const bridgeHandle = createBridgeHandler({
+  settings: () => settings,
+  target: targetTab,
+  approve,
+  busy: () => !!running,
+  runTask: (task, maxSteps) => start(task, { maxSteps }),
+  note: (text, ok) => add(el('div', `note${ok ? '' : ' err'}`, text)),
+});
+let bridge: { url: string; stop: () => void } | null = null;
+function connectBridge() {
+  const url = e2eUrl ? '' : settings.bridgeUrl.trim();
+  if (bridge?.url === url) return;
+  bridge?.stop();
+  bridge = url ? { url, stop: startBridge(url, bridgeHandle, up => ($('agents').hidden = !up)) } : null;
+}
 
 async function refreshStatus() {
   statusBtn.textContent = settings.model || 'no model';
@@ -403,6 +461,7 @@ $('grant').onclick = async () => {
 (async () => {
   settings = await loadSettings();
   void refreshStatus();
+  connectBridge();
   void checkPermission();
   if (e2eUrl) {
     // Test build: record what this page can reach before the run.

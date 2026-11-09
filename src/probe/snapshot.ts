@@ -13,6 +13,8 @@ export interface Rendered {
   dropped: number;
   chrome: number;
   scroller: Element | null;
+  flagged: number;
+  tainted: Element[];
 }
 
 const CHROME_CAP = 30;
@@ -40,7 +42,7 @@ export function findModal(doc: Document): Element | null {
 export function lineFor(it: Item, prefix: string, refs: Refs): string {
   switch (it.kind) {
     case 'el':
-      return `[${prefix}${refs.show(it.el!)}] ${it.line}`;
+      return `[${prefix}${refs.show(it.el!)}] ${it.line}${it.flag ? ' ⚠' : ''}`;
     case 'head':
       return `${'#'.repeat(Math.min(it.level ?? 2, 4))} ${it.line}`;
     case 'mark':
@@ -48,8 +50,13 @@ export function lineFor(it: Item, prefix: string, refs: Refs): string {
     case 'frame':
       return `‹frame:${it.frameId}›`;
     default:
-      return it.line;
+      return it.flag ? `⚠ ${it.line}` : it.line;
   }
+}
+
+/** Controls flagged by markInjection, for the probe's taint set. */
+export function flaggedControls(items: Item[]): Element[] {
+  return items.filter(it => it.kind === 'el' && it.flag && it.el).map(it => it.el!);
 }
 
 export function render(
@@ -123,7 +130,8 @@ export function render(
     if (it.kind === 'el') shown.push(line.slice(1, line.indexOf(']')));
     lines.push(line);
   }
-  return { text: lines.join('\n'), refs: shown, above, below, dropped, chrome, scroller };
+  const flagged = items.filter((it, i) => pick[i] && it.flag && it.kind !== 'el').length;
+  return { text: lines.join('\n'), refs: shown, above, below, dropped, chrome, scroller, flagged, tainted: flaggedControls(items) };
 }
 
 function nextPickedIsContent(items: Item[], pick: Uint8Array, i: number): boolean {
@@ -135,8 +143,17 @@ function nextPickedIsContent(items: Item[], pick: Uint8Array, i: number): boolea
 }
 
 /** Search the whole page for controls or text matching a query, ignoring the viewport. */
-export function find(root: Element, query: string, limit: number, prefix: string, refs: Refs, getFrameId?: (el: Element) => number) {
+export function find(
+  root: Element,
+  query: string,
+  limit: number,
+  prefix: string,
+  refs: Refs,
+  getFrameId?: (el: Element) => number,
+  taint?: (el: Element) => void,
+) {
   const { items } = walk(root, { full: true, textMax: 200, getFrameId });
+  for (const el of flaggedControls(items)) taint?.(el);
   const q = query.toLowerCase().trim();
   const words = q.split(/\s+/).filter(w => w.length > 1);
   const scored: { i: number; s: number }[] = [];

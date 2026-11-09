@@ -12,6 +12,9 @@ export default defineBackground(() => {
   // settings, open the task's start page, open the panel as a tab driving it, wait for the panel's report, clean up.
   const e2e = import.meta.env.WXT_E2E_URL as string | undefined;
   if (e2e) void benchLoop(e2e);
+  // e2e:bridge builds only: open the given page, and the panel as a tab driving it, as if the sidebar were open there.
+  const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
+  if (bridgeTest) void bridgeTestTabs(bridgeTest);
 
   browser.action.onClicked.addListener(() => {
     browser.sidebarAction.toggle();
@@ -30,6 +33,11 @@ export default defineBackground(() => {
     ['blocking', 'requestHeaders'],
   );
 });
+
+async function bridgeTestTabs(url: string) {
+  await browser.tabs.create({ url: `${url}/`, active: true });
+  await browser.tabs.create({ url: browser.runtime.getURL(`/sidepanel.html?tabUrl=${encodeURIComponent(url)}`), active: false });
+}
 
 async function benchLoop(base: string) {
   const keeper = (await browser.tabs.query({}))[0]?.id;

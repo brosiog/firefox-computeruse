@@ -8,7 +8,7 @@ import { readPage, pickContentRoot } from './read';
 import { find, findModal, render, scrollFacts, describe } from './snapshot';
 
 export interface Probe {
-  run(cmd: ProbeCmd & { gate?: Risk[] }): Promise<ProbeResult | Snapshot>;
+  run(cmd: ProbeCmd & { gate?: Risk[]; top?: string }): Promise<ProbeResult | Snapshot>;
 }
 
 declare const browser: { runtime: { getFrameId?: (t: unknown) => number } } | undefined;
@@ -37,18 +37,27 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
     win,
     doc,
     approved: !!approved,
-    gated: risk => (gate ?? ['write', 'delete', 'pay', 'secret']).includes(risk),
+    gated: risk => (gate ?? ['write', 'delete', 'pay', 'secret', 'exfil', 'suspicious']).includes(risk),
+    isTainted: el => {
+      for (let p: Element | null = el; p; p = p.parentElement) if (tainted.has(p)) return true;
+      return false;
+    },
   });
 
   let marks: HTMLElement | null = null;
+  // Controls on text written to AI agents (prompt injection): acting on them needs the user's approval.
+  const tainted = new WeakSet<Element>();
+  const taint = (el: Element) => tainted.add(el);
 
   return {
     async run(cmd) {
+      act.setTopOrigin(cmd.top ?? null);
       try {
         switch (cmd.op) {
           case 'snapshot': {
             const modal = findModal(doc);
             const r = render(modal ?? doc.body ?? doc.documentElement, cmd.budget, prefix, refs, el => getFrameId(el));
+            for (const el of r.tainted) taint(el);
             return {
               ok: true,
               frameId: selfFrame,
@@ -61,6 +70,8 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
               vh: win.innerHeight,
               hidden: { above: r.above, below: r.below, dropped: r.dropped, chrome: r.chrome },
               modal: modal ? describe(modal) : null,
+              links: refs.hrefs(),
+              flagged: r.flagged,
             } satisfies Snapshot;
           }
           case 'click': {
@@ -103,15 +114,15 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
           }
           case 'read': {
             const modal = findModal(doc);
-            const text = readPage(modal ?? pickContentRoot(doc), prefix, refs, cmd.offset, cmd.budget, cmd.query);
-            return { ok: true, msg: text };
+            const text = readPage(modal ?? pickContentRoot(doc), prefix, refs, cmd.offset, cmd.budget, cmd.query, taint);
+            return { ok: true, msg: text, links: refs.hrefs() };
           }
           case 'find': {
-            const { lines, total } = find(root(), cmd.text, cmd.limit, prefix, refs, el => getFrameId(el));
+            const { lines, total } = find(root(), cmd.text, cmd.limit, prefix, refs, el => getFrameId(el), taint);
             if (!lines.length) return { ok: true, msg: `nothing on this page matches "${cmd.text}".` };
             const shown = lines.filter(l => l.startsWith('[') || !l.startsWith('No exact')).length;
             const more = total > shown ? `\n(${total - shown} more matches; refine the text)` : '';
-            return { ok: true, msg: lines.join('\n') + more };
+            return { ok: true, msg: lines.join('\n') + more, links: refs.hrefs() };
           }
           case 'settle':
             return { ok: true, msg: await act.settle(doc, cmd.quietMs, cmd.maxMs) };
