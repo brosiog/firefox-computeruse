@@ -101,9 +101,10 @@ async function* lines(body: ReadableStream<Uint8Array>, signal: AbortSignal): As
   }
 }
 
-/** Grammar-constrained decoding can collapse into endless whitespace inside the JSON; stop early and fall back. */
-function degenerate(text: string): boolean {
-  return /\s{48}$/.test(text) || /(.{1,8})\1{30}$/s.test(text);
+/** Grammar-constrained decoding can collapse into endless whitespace inside the JSON: throws so the caller stops early
+ *  and falls back. */
+function checkDegenerate(text: string): void {
+  if (/\s{48}$/.test(text) || /(.{1,8})\1{30}$/s.test(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
 }
 
 export async function chat(
@@ -225,7 +226,7 @@ async function ollama(
     if (c) {
       text += c;
       onText?.(text);
-      if (degenerate(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
+      checkDegenerate(text);
     }
     if (j.done) {
       usage.promptTokens = j.prompt_eval_count;
@@ -298,7 +299,7 @@ async function openai(
       if (!firstTok) firstTok = performance.now();
       text += c;
       onText?.(text);
-      if (degenerate(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
+      checkDegenerate(text);
     }
     if (j.usage) {
       usage.promptTokens = j.usage.prompt_tokens;
@@ -378,7 +379,7 @@ async function responses(
         if (!firstTok) firstTok = performance.now();
         text += j.delta ?? '';
         onText?.(text);
-        if (degenerate(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
+        checkDegenerate(text);
         break;
       case 'response.completed': {
         completed = true;

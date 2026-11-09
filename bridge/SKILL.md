@@ -37,5 +37,6 @@ Rules:
 
 - Use refs from the latest page state only. After a navigation, the old refs are stale.
 - Actions in one call stop at the first failure or page change.
-- Submitting, sending, deleting, paying and typing passwords wait for the user to approve in the sidebar. Say so if a
-  call is slow.
+- Actions may wait for the user to approve in the sidebar. What asks depends on the sidebar's approval level (`status`
+  shows it): `every` asks before every action, `ask` before submits, sends, deletes, payments and passwords, `auto`
+  before payments and passwords only, and `off` never asks. Say so if a call is slow.

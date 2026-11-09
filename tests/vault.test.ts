@@ -6,7 +6,7 @@ import { systemPrompt } from '../src/agent/prompt';
 import { createBridgeHandler } from '../src/bridge';
 import type { Host } from '../src/browser/host';
 import type { Gate, LoginForm } from '../src/protocol';
-import { DEFAULTS } from '../src/settings';
+import { DEFAULTS, type Settings } from '../src/settings';
 import { createVault, maskUsername, sameSite, siteOf } from '../src/vault';
 
 const PASSWORD = 'hunter2-SECRET';
@@ -59,13 +59,13 @@ function fakeHost(form: Partial<LoginForm>, log: any[]): Host {
   };
 }
 
-function exec(o: { form?: Partial<LoginForm>; bw?: ReturnType<typeof fakeBw>; approve?: boolean; ask?: boolean } = {}) {
+function exec(o: { form?: Partial<LoginForm>; bw?: ReturnType<typeof fakeBw>; approve?: boolean; ask?: boolean; approval?: Settings['approval'] } = {}) {
   const log: any[] = [];
   const gates: Gate[] = [];
   const bw = o.bw ?? fakeBw();
   const e = createExecutor({
     host: fakeHost(o.form ?? {}, log),
-    settings: { ...DEFAULTS, vault: true, vaultAsk: o.ask ?? true },
+    settings: { ...DEFAULTS, vault: true, vaultAsk: o.ask ?? true, approval: o.approval ?? DEFAULTS.approval },
     ui: { approve: async g => (gates.push(g), o.approve ?? true), ask: async () => null },
     signal: new AbortController().signal,
     vault: createVault('http://localhost:8087', bw.f),
@@ -132,6 +132,16 @@ describe('login tool', () => {
     expect(parseAction('{"tool":"sign_in","account":"2"}', false, true)).toMatchObject({ ok: true, action: { tool: 'login', option: '2' } });
     expect(systemPrompt({ vision: false, reasoning: true })).not.toContain('"login"');
     expect(systemPrompt({ vision: false, reasoning: true, login: true })).toContain('{"tool":"login","enter":true}');
+  });
+
+  it('every-action mode asks even with the sign-in ask off; full auto never asks', async () => {
+    const every = exec({ ask: false, approval: 'every' });
+    expect((await run(every.e, '{"tool":"login"}')).ok).toBe(true);
+    expect(every.gates.map(g => g.risk)).toEqual(['login']);
+    const off = exec({ ask: true, approval: 'off' });
+    expect((await run(off.e, '{"tool":"login"}')).ok).toBe(true);
+    expect(off.gates).toEqual([]);
+    expect(off.log.find(c => c.op === 'fillLogin')).toMatchObject({ approved: true });
   });
 
   it('asks, then fills from the vault; the agent never sees the secrets', async () => {

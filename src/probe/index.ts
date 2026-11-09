@@ -88,7 +88,7 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
           case 'select': {
             const r = resolve(cmd.id);
             if ('error' in r) return { ok: false, error: r.error };
-            return act.select(r.el, cmd.option, ctx(false, cmd.gate));
+            return act.select(r.el, cmd.option, ctx(cmd.approved, cmd.gate));
           }
           case 'key': {
             let el: Element | null = null;

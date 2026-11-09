@@ -271,6 +271,15 @@ function withheld(g: Gate): ProbeResult {
   return { ok: false, error: `needs approval: ${g.what}`, gate: g };
 }
 
+/** The withheld result when this action needs approval first, else null. An action that is otherwise harmless (risk
+ *  `read`) still asks, as `act`, when every action needs approval. */
+function hold(g: Gate, ctx: ActCtx, verb: string): ProbeResult | null {
+  if (ctx.approved) return null;
+  if (ctx.gated(g.risk)) return withheld(g);
+  if (g.risk === 'read' && ctx.gated('act')) return withheld({ risk: 'act', what: `${verb} ${g.what}` });
+  return null;
+}
+
 export function click(el: Element, ctx: ActCtx): ProbeResult {
   const { win } = ctx;
   if (isDisabled(el)) return { ok: false, error: `${describe(el)} is disabled.` };
@@ -281,8 +290,8 @@ export function click(el: Element, ctx: ActCtx): ProbeResult {
   }
   const sus = suspicious(el, ctx, 'click');
   if (sus && !ctx.approved && ctx.gated('suspicious')) return withheld(sus);
-  const g = classifyClick(el);
-  if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
+  const held = hold(classifyClick(el), ctx, 'click');
+  if (held) return held;
 
   // Links that open a new tab would hit the popup blocker; the host opens them as a tab instead.
   const a = el.closest('a[href]') as HTMLAnchorElement | null;
@@ -322,10 +331,8 @@ export function type(el: Element, text: string, clear: boolean, enter: boolean, 
   if (isSecretField(el) && !ctx.approved && ctx.gated('secret')) return withheld({ risk: 'secret', what: `type into ${describe(el)}` });
   const sus = suspicious(el, ctx, 'type into');
   if (sus && !ctx.approved && ctx.gated('suspicious')) return withheld(sus);
-  if (enter) {
-    const g = classifyEnter(el);
-    if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
-  }
+  const held = (enter && hold(classifyEnter(el), ctx, 'type, then press')) || hold({ risk: 'read', what: `into ${describe(el)}` }, ctx, 'type');
+  if (held) return held;
 
   bringIntoView(el, win);
   flash(el, doc);
@@ -427,6 +434,8 @@ export function select(el: Element, option: string, ctx: ActCtx): ProbeResult {
     return { ok: false, error: `No option "${option}" in ${describe(el)}. Options: ${opts.slice(0, 30).map(x => clean(x.text, 30)).join(' | ')}` };
   }
   if (o.disabled) return { ok: false, error: `Option "${clean(o.text, 40)}" is disabled.` };
+  const held = hold({ risk: 'read', what: `"${clean(o.text, 60)}" in ${describe(el)}` }, ctx, 'select');
+  if (held) return held;
   flash(el, ctx.doc);
   s.focus({ preventScroll: true });
   o.selected = true;
@@ -445,23 +454,26 @@ export function key(target: Element | null, spec: string, ctx: ActCtx): ProbeRes
   const el = target ?? deepActive(doc) ?? doc.body;
   if (target) (target as HTMLElement).focus?.({ preventScroll: true });
   const field = el && (isTextField(el) || isEditable(el));
+  const on = el === doc.body ? 'the page' : describe(el);
   if (k.key === 'Enter' && !k.ctrl && !k.meta && el && field) {
-    const g = classifyEnter(el);
-    if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
+    const held = hold(classifyEnter(el), ctx, 'press');
+    if (held) return held;
     return { ok: true, msg: pressEnter(el, ctx) + '.' };
   }
   if (k.key === 'Enter' || k.key === ' ') {
     const role = roleOf(el);
     if (role && /^(button|link|menuitem|option|tab|checkbox|radio|switch|treeitem)/.test(role) && !(k.key === ' ' && role === 'link')) {
-      const g = classifyClick(el);
-      if (!ctx.approved && ctx.gated(g.risk)) return withheld(g);
+      const held = hold(classifyClick(el), ctx, `press ${spec} on`);
+      if (held) return held;
     }
   }
+  const held = hold({ risk: 'read', what: on }, ctx, `press ${spec} on`);
+  if (held) return held;
   const go = keyDown(el, k, win);
   let effect = '';
   if (go) effect = defaultKeyAction(el, k, ctx);
   keyUp(el, k, win);
-  return { ok: true, msg: `pressed ${spec} on ${el === doc.body ? 'the page' : describe(el)}${go ? effect : ' (handled by the page)'}.` };
+  return { ok: true, msg: `pressed ${spec} on ${on}${go ? effect : ' (handled by the page)'}.` };
 }
 
 function defaultKeyAction(el: Element, k: KeySpec, ctx: ActCtx): string {
