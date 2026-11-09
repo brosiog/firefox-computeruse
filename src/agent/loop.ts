@@ -95,26 +95,9 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let llmRetries = 0;
   let parseFails = 0;
   let wantShot = false;
-  const declined = new Set<string>();
-  // Navigation provenance: URLs the agent may open by typing them. Pages can offer links (and the agent can click
-  // them); a URL nobody offered, such as one carrying data to a third party, cannot be typed into the address bar.
-  const knownUrls = new Set<string>();
-  // Code-like tokens (letters+digits, 5+ chars) not in the task, seen in page lines that are flagged (⚠) or that
-  // talk about what the agent's answer should contain. A page never needs to tell a site's visitor what to answer.
-  const flaggedTokens = new Set<string>();
+  // The task enables the executor's navigation-provenance and planted-answer tracking (see ExecContext.task).
+  const exec = createExecutor({ host, settings: s, ui, signal, task: o.task });
   let bounced = false;
-  const ANSWER_TALK =
-    /\b(include|mention|add|append|put|state|write|say|repeat|end with|start with|begin with)\b[^.\n]{0,80}\b(answer|reply|response|summary|output)\b|\b(answer|reply|response|summary|output)\s+(must|should|has to|needs to)\s+(contain|include|mention|end|start|begin)/i;
-  const noteFlagged = (text: string) => {
-    for (const line of text.split('\n')) {
-      if (!line.includes('⚠') && !ANSWER_TALK.test(line)) continue;
-      for (const t of line.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,}\b/g) ?? []) {
-        if (!o.task.includes(t)) flaggedTokens.add(t);
-      }
-    }
-  };
-  const plantedToken = (answer: string) => [...flaggedTokens].find(t => answer.includes(t)) ?? null;
-  let currentUrl = '';
 
   const finish = (success: boolean, answer: string, n: number) => {
     ui.event({ type: 'done', success, answer, steps: n, ms: Date.now() - t0 });
@@ -127,9 +110,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
 
     const tObs = performance.now();
     const obs = await host.observe(s.pageBudget);
-    for (const l of obs.links ?? []) knownUrls.add(l);
-    noteFlagged(obs.text);
-    currentUrl = obs.url;
+    exec.observed(obs);
     let images: string[] | undefined;
     if (s.vision && (wantShot || s.screenshotEachStep) && !obs.restricted) {
       const shot = await host.screenshot(true);
@@ -218,7 +199,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     if (a.tool === 'done') {
       // An answer that repeats a code-like token found only in page text aimed at AI agents (⚠) is bounced back once:
       // "put X in your answer" is an injection goal no gate can stop, because it is only text.
-      const planted = !bounced && plantedToken(a.answer ?? '');
+      const planted = !bounced && exec.plantedToken(a.answer ?? '');
       if (planted) {
         bounced = true;
         trace({ raw: res.text, action: a, result: { ok: false, text: 'answer bounced' } });
@@ -232,20 +213,8 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     let result: { ok: boolean; text: string };
     const tAct = performance.now();
     try {
-      result = await execute(a, obs.url);
-      // A chain runs on the page the model saw: it stops at the first failure, at a page change (navigation, new
-      // tab), or at a tab switch; what did not run is said, so nothing is silently skipped.
-      if (a.dropped) result.text += `\n(the ${a.dropped} chained action(s) were not run: "then" only works after click, type, select, key, scroll or hover, on the same page)`;
-      const chain = a.then ?? [];
-      const tab0 = host.tabId;
-      for (let k = 0; k < chain.length; k++) {
-        if (!result.ok || /URL is now|new tab|navigated/.test(result.text) || host.tabId !== tab0) {
-          result.text += `\n(the remaining ${chain.length - k} chained action(s) were not run: ${result.ok ? 'the page changed' : 'the previous one failed'})`;
-          break;
-        }
-        const r = await execute(chain[k], obs.url);
-        result = { ok: r.ok, text: `${result.text}\nthen ${chain[k].tool}${chain[k].ref ? ` [${chain[k].ref}]` : ''}: ${r.ok ? 'OK' : 'Error'}: ${r.text}` };
-      }
+      result = await exec.run(a, obs.url);
+      if (a.tool === 'screenshot') wantShot = true;
     } catch (e) {
       result = { ok: false, text: `the action failed: ${(e as Error).message ?? e}` };
     }
@@ -271,7 +240,64 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   }
   return finish(false, `Reached the step limit (${s.maxSteps}) before finishing.`, s.maxSteps);
 
+}
+
+export interface ExecContext {
+  host: Host;
+  settings: Settings;
+  ui: Pick<AgentUI, 'approve' | 'ask'>;
+  signal: AbortSignal;
+  /**
+   * The user's task. When set (the agent loop), the executor also enforces navigation provenance (navigate/tab_new
+   * only to URLs a page linked, the current site, or a site the task names) and collects tokens from page text aimed
+   * at the agent for plantedToken. The bridge leaves it unset: its caller is the user's coding agent, which observes
+   * pages through the bridge, not through this executor; browser_task runs the full agent loop with both checks.
+   */
+  task?: string;
+}
+
+export interface Executor {
+  /** Feeds what the agent saw (links, the current URL, flagged page text) to the provenance and planted checks. */
+  observed(obs: { url: string; text: string; links?: string[] }): void;
+  /** A code-like token from page text aimed at the agent that this answer repeats, if any. */
+  plantedToken(answer: string): string | null;
+  /** Runs one action (no chain). */
+  execute(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }>;
+  /** Runs an action and its `then` chain, stopping at the first failure or page change. */
+  run(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }>;
+}
+
+/** Executes actions against a host, with approval gating. Shared by the agent loop and the agent bridge. */
+export function createExecutor(o: ExecContext): Executor {
+  const { host, settings: s, signal } = o;
+  const declined = new Set<string>();
+  // Navigation provenance: URLs the agent may open by typing them. Pages can offer links (and the agent can click
+  // them); a URL nobody offered, such as one carrying data to a third party, cannot be typed into the address bar.
+  const knownUrls = new Set<string>();
+  // Code-like tokens (letters+digits, 5+ chars) not in the task, seen in page lines that are flagged (⚠) or that
+  // talk about what the agent's answer should contain. A page never needs to tell a site's visitor what to answer.
+  const flaggedTokens = new Set<string>();
+  let currentUrl = '';
+  const ANSWER_TALK =
+    /\b(include|mention|add|append|put|state|write|say|repeat|end with|start with|begin with)\b[^.\n]{0,80}\b(answer|reply|response|summary|output)\b|\b(answer|reply|response|summary|output)\s+(must|should|has to|needs to)\s+(contain|include|mention|end|start|begin)/i;
+  const noteFlagged = (text: string) => {
+    if (o.task === undefined) return;
+    for (const line of text.split('\n')) {
+      if (!line.includes('⚠') && !ANSWER_TALK.test(line)) continue;
+      for (const t of line.match(/\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,}\b/g) ?? []) {
+        if (!o.task.includes(t)) flaggedTokens.add(t);
+      }
+    }
+  };
+  const plantedToken = (answer: string) => [...flaggedTokens].find(t => answer.includes(t)) ?? null;
+  const observed = (obs: { url: string; text: string; links?: string[] }) => {
+    for (const l of obs.links ?? []) knownUrls.add(l);
+    noteFlagged(obs.text);
+    currentUrl = obs.url;
+  };
+
   function blockedUrl(raw: string): string | null {
+    if (o.task === undefined) return null;
     const target = toUrl(raw);
     if (target.startsWith('https://duckduckgo.com/?q=')) return null;
     let u: URL;
@@ -290,9 +316,9 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     }
     // A site the user named in the task (by host, or by its name: "wikipedia" for en.wikipedia.org).
     const t = o.task.toLowerCase();
-    const host = u.hostname.replace(/^www\./, '').toLowerCase();
-    const label = host.split('.').slice(-2)[0];
-    if (t.includes(host) || (label.length >= 4 && new RegExp(`\\b${label}\\b`).test(t))) return null;
+    const hostname = u.hostname.replace(/^www\./, '').toLowerCase();
+    const label = hostname.split('.').slice(-2)[0];
+    if (t.includes(hostname) || (label.length >= 4 && new RegExp(`\\b${label}\\b`).test(t))) return null;
     return `blocked by safety policy: ${u.origin} was not given by the user and no page you saw links to it. Open pages by clicking their links; if you need this site, ask the user.`;
   }
 
@@ -373,7 +399,6 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
         return { ok: true, text: `waited ${sec}s. ${await host.settle(urlBefore)}`.trim() };
       }
       case 'screenshot':
-        wantShot = true;
         return { ok: true, text: 'a screenshot of the page (with refs drawn on it) is attached below.' };
       case 'ask': {
         const ans = await o.ui.ask(a.text ?? '');
@@ -383,4 +408,24 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
         return { ok: false, text: `unknown tool ${a.tool}` };
     }
   }
+
+  async function run(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }> {
+    let result = await execute(a, urlBefore);
+    // A chain runs on the page the model saw: it stops at the first failure, at a page change (navigation, new
+    // tab), or at a tab switch; what did not run is said, so nothing is silently skipped.
+    if (a.dropped) result.text += `\n(the ${a.dropped} chained action(s) were not run: "then" only works after click, type, select, key, scroll or hover, on the same page)`;
+    const chain = a.then ?? [];
+    const tab0 = host.tabId;
+    for (let k = 0; k < chain.length; k++) {
+      if (!result.ok || /URL is now|new tab|navigated/.test(result.text) || host.tabId !== tab0) {
+        result.text += `\n(the remaining ${chain.length - k} chained action(s) were not run: ${result.ok ? 'the page changed' : 'the previous one failed'})`;
+        break;
+      }
+      const r = await execute(chain[k], urlBefore);
+      result = { ok: r.ok, text: `${result.text}\nthen ${chain[k].tool}${chain[k].ref ? ` [${chain[k].ref}]` : ''}: ${r.ok ? 'OK' : 'Error'}: ${r.text}` };
+    }
+    return result;
+  }
+
+  return { observed, plantedToken, execute, run };
 }

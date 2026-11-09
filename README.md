@@ -135,12 +135,54 @@ deterministic checks in the probe and the agent loop. None of them costs a model
 
 Benchmark and results: [bench/README.md](bench/README.md#security-prompt-injection).
 
+## Coding agents (MCP and CLI)
+
+`bridge/fcu.mjs` connects coding agents to the browser. It is one Node file with no dependencies. The sidebar
+long-polls it on `127.0.0.1:47823`; set this in *Settings → Agent bridge*, or leave the field empty to turn it off. An
+**agents** pill shows in the header while an agent is connected. Agents get three tools:
+
+| Tool | What it does |
+| --- | --- |
+| `browser_observe` | The current tab as compact text with refs; optionally a screenshot. |
+| `browser_act` | One or more actions (same vocabulary as the built-in agent), then the new page state in the same reply. |
+| `browser_task` | Hands a whole chore to the extension's local-model agent and returns its answer. It's cheap on the caller's context. |
+
+Actions run with the same probe and approval gates as the built-in agent. Submits, sends, deletes, payments and
+passwords wait for **Allow once** in the sidebar, and each agent action is listed in the sidebar log.
+
+```sh
+# Claude Code
+claude mcp add firefox -- node /path/to/firefox-computeruse/bridge/fcu.mjs
+# Codex (~/.codex/config.toml)
+[mcp_servers.firefox]
+command = "node"
+args = ["/path/to/firefox-computeruse/bridge/fcu.mjs"]
+# Hermes (~/.hermes/config.yaml)
+mcp_servers:
+  firefox: { command: node, args: ["/path/to/firefox-computeruse/bridge/fcu.mjs"] }
+```
+
+pi has no MCP support. Use the CLI instead: copy `bridge/SKILL.md` into its skills directory, or paste it into
+`AGENTS.md`. Any harness that can run shell commands can use the CLI the same way:
+
+```sh
+node bridge/fcu.mjs status
+node bridge/fcu.mjs observe [--shot page.jpg]
+node bridge/fcu.mjs act '[{"tool":"type","ref":"5","text":"usb hub","enter":true}]'
+node bridge/fcu.mjs task "find the cheapest USB-C hub here and report its price"
+```
+
+Several harnesses can run at once. The first bridge process becomes the hub, and later ones relay through it. If the
+hub's process exits, the next call takes over the port. Commands run one at a time. The hub refuses web pages: it
+requires an `x-fcu` header (which needs a CORS preflight it never grants), a loopback `Host`, and no foreign `Origin`.
+
 ## Development
 
 ```sh
 pnpm test           # unit tests (vitest + happy-dom): probe, parser, prompt-cache invariants, agent loop
 pnpm type-check
 pnpm e2e            # real headless Firefox + fixture shop + scripted OpenAI-compatible fake model
+pnpm e2e:bridge     # real headless Firefox driven through bridge/fcu.mjs (CLI)
 MODEL_URL=http://192.168.86.202:8000/v1 MODEL=qwen3.8-27b-splash pnpm e2e   # same task, real model
 ```
 
@@ -192,6 +234,8 @@ src/probe/    perception (walk, snapshot, read, find) and actions, gating
 src/agent/    loop, prompt/history, tools + tolerant parser
 src/llm/      streaming client: OpenAI-compatible + Ollama native
 src/browser/  host: tabs, frames, navigation, screenshots
+src/bridge.ts agent bridge, extension side (poll loop, observe/act/task)
+bridge/       fcu.mjs: MCP stdio server + CLI + localhost hub; SKILL.md for CLI-only harnesses
 e2e/          fixture shop, fake model, Firefox runner
 ```
 
@@ -201,7 +245,7 @@ e2e/          fixture shop, fake model, Firefox runner
 - File uploads (Firefox can't set file inputs from an extension without a native helper), and drag and drop.
 - Real trusted input (`isTrusted` events). That would need a native-messaging helper driving Firefox over WebDriver BiDi,
   which only matters for the few sites that check.
-- Persisted conversations, follow-up messages in the same run, and an MCP bridge.
+- Persisted conversations and follow-up messages in the same run.
 - Injection in screenshots (vision mode) is not covered by the text detector; VPI-Bench-style visual attacks are untested.
 - No checks yet with a real Firefox on macOS, only headless Firefox on Linux. The extension has no platform-specific code
   apart from the `MacCtrl` shortcut.
