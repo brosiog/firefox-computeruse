@@ -30,6 +30,8 @@ export interface Settings {
   history: 'extend' | 'compact';
   /** Tokens of history (extend mode) before old page states are dropped. */
   historyBudget: number;
+  /** Agent bridge hub (bridge/fcu.mjs) the sidebar connects to, so coding agents can use the browser. Empty: off. */
+  bridgeUrl: string;
   /** Benchmarks only: replaces the built-in system prompt. Not shown in the UI. */
   systemOverride?: string;
 }
@@ -80,6 +82,7 @@ export const DEFAULTS: Settings = {
   keepAlive: '30m',
   history: 'extend',
   historyBudget: 16000,
+  bridgeUrl: 'http://127.0.0.1:47823',
 };
 
 declare const browser: any;

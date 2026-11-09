@@ -93,7 +93,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let llmRetries = 0;
   let parseFails = 0;
   let wantShot = false;
-  const declined = new Set<string>();
+  const exec = createExecutor({ host, settings: s, ui, signal });
 
   const finish = (success: boolean, answer: string, n: number) => {
     ui.event({ type: 'done', success, answer, steps: n, ms: Date.now() - t0 });
@@ -199,20 +199,8 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     let result: { ok: boolean; text: string };
     const tAct = performance.now();
     try {
-      result = await execute(a, obs.url);
-      // A chain runs on the page the model saw: it stops at the first failure, at a page change (navigation, new
-      // tab), or at a tab switch; what did not run is said, so nothing is silently skipped.
-      if (a.dropped) result.text += `\n(the ${a.dropped} chained action(s) were not run: "then" only works after click, type, select, key, scroll or hover, on the same page)`;
-      const chain = a.then ?? [];
-      const tab0 = host.tabId;
-      for (let k = 0; k < chain.length; k++) {
-        if (!result.ok || /URL is now|new tab|navigated/.test(result.text) || host.tabId !== tab0) {
-          result.text += `\n(the remaining ${chain.length - k} chained action(s) were not run: ${result.ok ? 'the page changed' : 'the previous one failed'})`;
-          break;
-        }
-        const r = await execute(chain[k], obs.url);
-        result = { ok: r.ok, text: `${result.text}\nthen ${chain[k].tool}${chain[k].ref ? ` [${chain[k].ref}]` : ''}: ${r.ok ? 'OK' : 'Error'}: ${r.text}` };
-      }
+      result = await exec.run(a, obs.url);
+      if (a.tool === 'screenshot') wantShot = true;
     } catch (e) {
       result = { ok: false, text: `the action failed: ${(e as Error).message ?? e}` };
     }
@@ -237,6 +225,27 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     steps.push({ page: tail, action: hist, result: `${result.ok ? 'OK' : 'Error'}: ${result.text}` });
   }
   return finish(false, `Reached the step limit (${s.maxSteps}) before finishing.`, s.maxSteps);
+
+}
+
+export interface ExecContext {
+  host: Host;
+  settings: Settings;
+  ui: Pick<AgentUI, 'approve' | 'ask'>;
+  signal: AbortSignal;
+}
+
+export interface Executor {
+  /** Runs one action (no chain). */
+  execute(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }>;
+  /** Runs an action and its `then` chain, stopping at the first failure or page change. */
+  run(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }>;
+}
+
+/** Executes actions against a host, with approval gating. Shared by the agent loop and the agent bridge. */
+export function createExecutor(o: ExecContext): Executor {
+  const { host, settings: s, signal } = o;
+  const declined = new Set<string>();
 
   async function execute(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }> {
     const gate = gatesFor(s.approval);
@@ -297,8 +306,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
         return { ok: true, text: `waited ${sec}s. ${await host.settle(urlBefore)}`.trim() };
       }
       case 'screenshot':
-        wantShot = true;
-        return { ok: true, text: 'a screenshot of the page (with refs drawn on it) is attached below.' };
+          return { ok: true, text: 'a screenshot of the page (with refs drawn on it) is attached below.' };
       case 'ask': {
         const ans = await o.ui.ask(a.text ?? '');
         return ans === null ? { ok: false, text: 'the user did not answer.' } : { ok: true, text: `the user answered: ${ans}` };
@@ -307,4 +315,24 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
         return { ok: false, text: `unknown tool ${a.tool}` };
     }
   }
+
+  async function run(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }> {
+    let result = await execute(a, urlBefore);
+    // A chain runs on the page the model saw: it stops at the first failure, at a page change (navigation, new
+    // tab), or at a tab switch; what did not run is said, so nothing is silently skipped.
+    if (a.dropped) result.text += `\n(the ${a.dropped} chained action(s) were not run: "then" only works after click, type, select, key, scroll or hover, on the same page)`;
+    const chain = a.then ?? [];
+    const tab0 = host.tabId;
+    for (let k = 0; k < chain.length; k++) {
+      if (!result.ok || /URL is now|new tab|navigated/.test(result.text) || host.tabId !== tab0) {
+        result.text += `\n(the remaining ${chain.length - k} chained action(s) were not run: ${result.ok ? 'the page changed' : 'the previous one failed'})`;
+        break;
+      }
+      const r = await execute(chain[k], urlBefore);
+      result = { ok: r.ok, text: `${result.text}\nthen ${chain[k].tool}${chain[k].ref ? ` [${chain[k].ref}]` : ''}: ${r.ok ? 'OK' : 'Error'}: ${r.text}` };
+    }
+    return result;
+  }
+
+  return { execute, run };
 }

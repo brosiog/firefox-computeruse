@@ -9,6 +9,7 @@
   <body>
     <header>
       <div class="brand">Computer Use</div>
+      <span id="agents" class="pill ok" title="A coding agent is connected through the bridge" hidden>agents</span>
       <button id="status" class="pill" title="Model server">…</button>
       <button id="new" class="icon" title="New task">＋</button>
       <button id="gear" class="icon" title="Settings">⚙</button>
@@ -85,6 +86,9 @@
             <option value="ask">Ask before submitting, sending or deleting</option>
             <option value="auto">Auto (still asks for payments and passwords)</option>
           </select>
+        </label>
+        <label>Agent bridge (lets Claude Code, Codex, … use this browser; empty = off)
+          <input name="bridgeUrl" placeholder="http://127.0.0.1:47823" />
         </label>
         <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
         <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>

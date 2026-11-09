@@ -4,6 +4,7 @@ import { createHost } from '../../src/browser/host';
 import { chat, listModels, modelInfo, prewarm, type Usage } from '../../src/llm/client';
 import { primer, systemPrompt } from '../../src/agent/prompt';
 import type { Gate } from '../../src/protocol';
+import { createBridgeHandler, startBridge } from '../../src/bridge';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
 
 declare const browser: any;
@@ -213,20 +214,30 @@ function warm(): Promise<number> {
 }
 input.addEventListener('input', () => void warm());
 
-async function start(task: string) {
-  if (running) return;
+/** Runs the built-in agent. `fromAgent`: a coding agent delegated the task over the bridge; questions go back to it. */
+async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{ success: boolean; answer: string } | null> {
+  if (running) return null;
   if (!settings.model) {
+    if (fromAgent) return { success: false, answer: 'No model is configured in the Firefox Computer Use settings.' };
     openSettings();
-    return;
+    return null;
   }
-  add(el('div', 'msg user', task));
-  running = new AbortController();
+  add(el('div', 'msg user', fromAgent ? `agent: ${task}` : task));
+  const ctrl = (running = new AbortController());
   go.textContent = 'Stop';
   go.classList.add('stop');
+  let question: string | null = null;
+  const agentAsk = async (q: string) => {
+    question = q;
+    ctrl.abort();
+    return null;
+  };
+  const s = fromAgent?.maxSteps ? { ...settings, maxSteps: fromAgent.maxSteps } : settings;
   try {
     const { tabId, windowId } = await targetTab();
     const host = createHost(tabId, windowId);
-    const r = await runAgent({ task, settings, host, ui: { event: onEvent, approve, ask }, signal: running.signal });
+    let r = await runAgent({ task, settings: s, host, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal });
+    if (question) r = { success: false, answer: `The agent needs more information: ${question}` };
     (window as any).__lastResult = r;
     if (e2eUrl) {
       await fetch(`${e2eUrl}/e2e/report`, {
@@ -242,8 +253,10 @@ async function start(task: string) {
       });
       await browser.runtime.sendMessage({ type: 'e2e-done', job: e2eParams.get('job') });
     }
+    return r;
   } catch (e) {
     onEvent({ type: 'error', text: `agent crashed: ${(e as Error).message ?? e}` });
+    return { success: false, answer: `The agent crashed: ${(e as Error).message ?? e}` };
   } finally {
     running = null;
     go.textContent = 'Run';
@@ -374,7 +387,26 @@ dlg.addEventListener('close', async () => {
   settings = read();
   await saveSettings(settings);
   void refreshStatus();
+  connectBridge();
 });
+
+// ---------- agent bridge ----------
+
+const bridgeHandle = createBridgeHandler({
+  settings: () => settings,
+  target: targetTab,
+  approve,
+  busy: () => !!running,
+  runTask: (task, maxSteps) => start(task, { maxSteps }),
+  note: (text, ok) => add(el('div', `note${ok ? '' : ' err'}`, text)),
+});
+let bridge: { url: string; stop: () => void } | null = null;
+function connectBridge() {
+  const url = e2eUrl ? '' : settings.bridgeUrl.trim();
+  if (bridge?.url === url) return;
+  bridge?.stop();
+  bridge = url ? { url, stop: startBridge(url, bridgeHandle, up => ($('agents').hidden = !up)) } : null;
+}
 
 async function refreshStatus() {
   statusBtn.textContent = settings.model || 'no model';
@@ -403,6 +435,7 @@ $('grant').onclick = async () => {
 (async () => {
   settings = await loadSettings();
   void refreshStatus();
+  connectBridge();
   void checkPermission();
   if (e2eUrl) {
     // Test build: record what this page can reach before the run.
