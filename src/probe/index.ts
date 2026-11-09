@@ -115,7 +115,7 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
           }
           case 'read': {
             const modal = findModal(doc);
-            const text = readPage(modal ?? pickContentRoot(doc), prefix, refs, cmd.offset, cmd.budget, cmd.query, taint);
+            const text = readPage(modal ?? pickContentRoot(doc), prefix, refs, cmd.offset, cmd.budget, cmd.query, taint, cmd.plain);
             return { ok: true, msg: text, links: refs.hrefs() };
           }
           case 'find': {

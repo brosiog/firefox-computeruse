@@ -6,7 +6,7 @@ import { chat as realChat, type ChatResult, type Usage } from '../llm/client';
 import type { Gate, ProbeResult, Risk } from '../protocol';
 import type { Settings } from '../settings';
 import { fence, toUrl, type Host } from '../browser/host';
-import { buildMessages, compact, estimateTokens, systemPrompt, taskMessage, type Step } from './prompt';
+import { attachedBlock, buildMessages, compact, estimateTokens, systemPrompt, taskMessage, type AttachedTab, type Step } from './prompt';
 import { actionSchema, canonical, extractJson, parseAction, type Action } from './tools';
 import { login } from './login';
 import type { Vault } from '../vault';
@@ -19,6 +19,7 @@ export type AgentEvent =
   | { type: 'result'; ok: boolean; text: string }
   | { type: 'parse-error'; raw: string; error: string }
   | { type: 'compacted' }
+  | { type: 'attached'; tabs: { n: number; title: string; chars: number; error?: string }[] }
   | { type: 'error'; text: string }
   | { type: 'done'; success: boolean; answer: string; steps: number; ms: number }
   | { type: 'trace'; step: StepTrace };
@@ -53,6 +54,8 @@ export interface RunOptions {
   ui: AgentUI;
   signal: AbortSignal;
   chat?: typeof realChat;
+  /** Tab ids the user attached to the task (the composer's @ mentions). Their text is read once, up front. */
+  tabs?: number[];
   now?: () => Date;
   /** Bitwarden, when the user turned logins on (and, for delegated tasks, allowed agents). Offers the login tool. */
   vault?: Vault | null;
@@ -90,7 +93,10 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   const vault = o.vault ?? null;
   const system = s.systemOverride || systemPrompt({ vision: s.vision, reasoning: s.reasoning, login: !!vault });
   const date = (o.now?.() ?? new Date()).toISOString().slice(0, 10);
-  const task = taskMessage(o.task, date);
+  // The task enables the executor's navigation-provenance and planted-answer tracking (see ExecContext.task).
+  const exec = createExecutor({ host, settings: s, ui, signal, task: o.task, vault });
+  const att = await readAttached(o, exec);
+  const task = taskMessage(o.task, date, att.block);
   const schema = actionSchema(s.vision, s.reasoning, !!vault);
   let steps: Step[] = [];
   let prevRefs = new Set<string>();
@@ -100,8 +106,6 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let llmRetries = 0;
   let parseFails = 0;
   let wantShot = false;
-  // The task enables the executor's navigation-provenance and planted-answer tracking (see ExecContext.task).
-  const exec = createExecutor({ host, settings: s, ui, signal, task: o.task, vault });
   let bounced = false;
 
   const finish = (success: boolean, answer: string, n: number) => {
@@ -135,7 +139,8 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     const mode = s.history ?? 'extend';
     const fixed = estimateTokens(buildMessages(system, task, [], tail, images));
     const room = s.contextWindow - Math.max(s.maxOutput, s.effort === 'none' ? 0 : 4096) - 256;
-    const budget = mode === 'extend' ? Math.min(room, Math.max(4000, s.historyBudget ?? 16000)) : room;
+    // Attached tabs are part of the fixed opening, not history: they do not eat into the history budget.
+    const budget = mode === 'extend' ? Math.min(room, Math.max(4000, s.historyBudget ?? 16000) + att.tokens) : room;
     const c = compact(steps, budget, fixed, mode);
     if (c.changed) {
       steps = c.steps;
@@ -245,6 +250,31 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   }
   return finish(false, `Reached the step limit (${s.maxSteps}) before finishing.`, s.maxSteps);
 
+}
+
+/** Characters of text per attached tab: a share of a total that fits small context windows (~6k tokens by default). */
+export function attachBudget(s: Pick<Settings, 'pageBudget' | 'contextWindow'>, count: number): number {
+  const total = Math.min(4 * s.pageBudget, Math.floor(s.contextWindow * 3.3 * 0.35));
+  return Math.max(1500, Math.min(2 * s.pageBudget, Math.floor(total / Math.max(1, count))));
+}
+
+/** Reads the attached tabs and feeds what they show to the executor's provenance and planted-answer checks. */
+async function readAttached(o: RunOptions, exec: Executor): Promise<{ block: string; tokens: number }> {
+  const ids = [...new Set(o.tabs ?? [])];
+  if (!ids.length || !o.host.readTab) return { block: '', tokens: 0 };
+  const others = ids.filter(id => id !== o.host.tabId);
+  const per = attachBudget(o.settings, others.length);
+  const reads: AttachedTab[] = [];
+  for (const id of others) {
+    if (o.signal.aborted) break;
+    const r = await o.host.readTab(id, per);
+    reads.push(r);
+    // The user handed these tabs over: their URLs and the links on them may be opened like any page the agent saw.
+    if (!r.error) exec.observed({ url: r.url, text: r.text, links: [r.url.split('#')[0], ...r.links] });
+  }
+  o.ui.event({ type: 'attached', tabs: reads.map(r => ({ n: r.n, title: r.title, chars: r.text.length, error: r.error })) });
+  const block = attachedBlock(reads, fence, others.length < ids.length ? 1 : undefined);
+  return { block, tokens: Math.ceil(block.length / 3.3) };
 }
 
 export interface ExecContext {

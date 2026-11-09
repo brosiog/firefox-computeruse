@@ -27,7 +27,9 @@ export function pickContentRoot(doc: Document): Element {
   return best && bestLen > bodyLen * 0.25 ? best : doc.body ?? doc.documentElement;
 }
 
-export function readLines(root: Element, prefix: string, refs: Refs, taint?: (el: Element) => void): string[] {
+/** `plain`: links and buttons keep their names but not their refs (text read from another tab, where refs would be
+ * mistaken for refs on the current page). They are still registered, so their URLs count as seen. */
+export function readLines(root: Element, prefix: string, refs: Refs, taint?: (el: Element) => void, plain = false): string[] {
   const win = root.ownerDocument.defaultView!;
   const lines: string[] = [];
   let buf = '';
@@ -87,7 +89,8 @@ export function readLines(root: Element, prefix: string, refs: Refs, taint?: (el
     if (isNativeInteractive(el) && (tag === 'A' || tag === 'BUTTON' || role === 'button' || role === 'link')) {
       const n = nameOf(el, 120);
       if (n) {
-        buf += ` ${n}[${prefix}${refs.show(el)}] `;
+        const id = refs.show(el);
+        buf += plain ? ` ${n} ` : ` ${n}[${prefix}${id}] `;
         lineEls.push(el);
       }
       return;
@@ -114,8 +117,8 @@ export function readLines(root: Element, prefix: string, refs: Refs, taint?: (el
   return lines.filter((l, i) => l !== lines[i - 1]);
 }
 
-export function readPage(root: Element, prefix: string, refs: Refs, offset: number, budget: number, query?: string, taint?: (el: Element) => void): string {
-  const lines = readLines(root, prefix, refs, taint);
+export function readPage(root: Element, prefix: string, refs: Refs, offset: number, budget: number, query?: string, taint?: (el: Element) => void, plain = false): string {
+  const lines = readLines(root, prefix, refs, taint, plain);
   if (query && query.trim()) {
     const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1);
     const keep = new Set<number>();

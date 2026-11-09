@@ -185,6 +185,14 @@ describe('actions', () => {
     const q = (await p.run({ op: 'read', offset: 0, budget: 4000, query: 'weight' })) as any;
     expect(q.msg).toContain('Weight: 120 g.');
   });
+
+  it('plain read (an attached tab) keeps link names but drops refs, and still reports the links', async () => {
+    const p = page(`<main><p>Price: $19. See <a href="/more">details</a> or <button>Buy</button>.</p></main>`);
+    const r = (await p.run({ op: 'read', offset: 0, budget: 4000, plain: true })) as any;
+    expect(r.msg).toContain('See details or Buy');
+    expect(r.msg).not.toMatch(/\[\d+\]/);
+    expect(r.links.some((l: string) => l.endsWith('/more'))).toBe(true);
+  });
 });
 
 describe('visibility', () => {
