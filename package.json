@@ -14,6 +14,7 @@
     "type-check": "wxt prepare && tsc --noEmit",
     "e2e": "node e2e/run.mjs",
     "e2e:bridge": "node e2e/bridge.mjs",
+    "e2e:login": "node e2e/login-lab.mjs",
     "bench": "node bench/run.mjs",
     "bench:oracle": "node bench/run.mjs --model oracle --perturb all",
     "bench:replay": "node bench/replay.mjs",

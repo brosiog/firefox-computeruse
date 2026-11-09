@@ -40,6 +40,9 @@ export default defineBackground(() => {
 });
 
 async function bridgeTestTabs(url: string) {
+  // Settings the test wants the panel to start with, if any.
+  const settings = await fetch(`${url}/e2e/settings`).then(r => (r.ok ? r.json() : null), () => null);
+  if (settings) await browser.storage.local.set({ settings });
   await browser.tabs.create({ url: `${url}/`, active: true });
   await browser.tabs.create({ url: browser.runtime.getURL(`/sidepanel.html?tabUrl=${encodeURIComponent(url)}`), active: false });
 }

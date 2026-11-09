@@ -9,8 +9,8 @@ import http from 'node:http';
 
 const SHOP = 'http://127.0.0.1';
 const FRAME = 'http://localhost'; // a different origin: the card field lives in a cross-origin iframe
-export const PORTS = { shop: 8791, frame: 8792, model: 8793 };
-export const state = { gates: [], approveNext: null, orders: [], requests: [], originRejected: 0, prefixShare: [], config: null, report: null, onReport: null };
+export const PORTS = { shop: 8791, frame: 8792, model: 8793, bw: 8794 };
+export const state = { gates: [], approveNext: null, orders: [], requests: [], originRejected: 0, prefixShare: [], config: null, report: null, onReport: null, bridgeSettings: null, logins: [], bw: { calls: [], rejected: 0, items: [] } };
 
 const layout = (title, body, extra = '') => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>body{font:15px system-ui;margin:0}header{display:flex;gap:12px;padding:10px;background:#eee}main{padding:16px}
@@ -23,6 +23,27 @@ const PRODUCTS = [
   { id: 2, name: 'TinyHub USB-C 4-port', price: 19.5 },
   { id: 3, name: 'ProLink USB Hub 7-port', price: 34.99 },
 ];
+
+
+const loginPage = () =>
+  layout(
+    'Sign in',
+    `<h1>Sign in</h1><form method="post" action="/session">
+    <label>Email <input name="email" type="email" autocomplete="username"></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password"></label>
+    <button type="submit">Sign in</button></form>`,
+  );
+
+function session(req, res, where) {
+  let body = '';
+  req.on('data', c => (body += c));
+  req.on('end', () => {
+    const f = new URLSearchParams(body);
+    state.logins.push({ where, email: f.get('email'), password: f.get('password') });
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(layout('Account', '<h1>Welcome back!</h1><p>You are signed in.</p>'));
+  });
+}
 
 function shop(req, res, port, framePort) {
   const u = new URL(req.url, `${SHOP}:${port}`);
@@ -39,6 +60,15 @@ function shop(req, res, port, framePort) {
     state.served = true;
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ id: 'e2e', startUrl: state.config.tabUrl + '/', ...state.config }));
+  }
+  if (u.pathname === '/e2e/settings') {
+    // e2e:bridge: settings the panel starts with (Bitwarden on, pointed at the fake bw serve).
+    if (!state.bridgeSettings) {
+      res.writeHead(404);
+      return res.end();
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify(state.bridgeSettings));
   }
   if (u.pathname === '/e2e/approve') {
     // e2e:bridge: the panel asks how to answer an approval card; the test sets the answer and sees which gate fired.
@@ -114,6 +144,8 @@ function shop(req, res, port, framePort) {
       ),
     );
   }
+  if (u.pathname === '/login') return send(loginPage());
+  if (u.pathname === '/session' && req.method === 'POST') return session(req, res, 'shop');
   if (u.pathname === '/order' && req.method === 'POST') {
     let body = '';
     req.on('data', c => (body += c));
@@ -129,6 +161,12 @@ function shop(req, res, port, framePort) {
 }
 
 function cardFrame(req, res) {
+  // Also a lookalike sign-in page on another origin: the vault must not fill the shop's login here.
+  if (req.url.startsWith('/login')) {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    return res.end(loginPage());
+  }
+  if (req.url.startsWith('/session')) return session(req, res, 'other');
   res.writeHead(200, { 'content-type': 'text/html' });
   res.end(`<!doctype html><body style="font:14px system-ui"><label>Card holder <input id="holder" autocomplete="cc-name"></label>
   <p id="echo"></p><script>document.getElementById('holder').addEventListener('input', e => document.getElementById('echo').textContent = 'Holder: ' + e.target.value)</script></body>`);
@@ -241,16 +279,40 @@ function model(req, res) {
   });
 }
 
+
+// A fake `bw serve` (Bitwarden CLI API), strict where the real one is: requests with an Origin header, or a Host other
+// than localhost/127.0.0.1, get 403. It returns every item for any url, like a too-loose match would, so the
+// extension's own site check is what keeps a login off other origins.
+function bwServe(req, res) {
+  const u = new URL(req.url, 'http://localhost');
+  state.bw.calls.push(`${req.method} ${u.pathname}`);
+  const host = (req.headers.host ?? '').toLowerCase();
+  if (req.headers.origin !== undefined || !/^(localhost|127\.0\.0\.1):\d+$/.test(host)) {
+    state.bw.rejected++;
+    res.writeHead(403);
+    return res.end();
+  }
+  const json = (b, code = 200) => (res.writeHead(code, { 'content-type': 'application/json' }), res.end(JSON.stringify(b)));
+  if (u.pathname === '/status') return json({ success: true, data: { object: 'template', template: { status: 'unlocked', userEmail: 'owner@example.test' } } });
+  if (u.pathname === '/list/object/items') return json({ success: true, data: { object: 'list', data: state.bw.items } });
+  const m = /^\/object\/item\/(.+)$/.exec(u.pathname);
+  const it = m && state.bw.items.find(i => i.id === m[1]);
+  if (it) return json({ success: true, data: it });
+  json({ success: false, message: 'Not found.' }, 404);
+}
+
 export function start() {
   return new Promise(resolve => {
     const servers = {};
     const shopSrv = http.createServer((q, r) => shop(q, r, servers.shop, servers.frame));
     const frameSrv = http.createServer(cardFrame);
     const modelSrv = http.createServer(model);
+    const bwSrv = http.createServer(bwServe);
     let n = 0;
-    const done = () => ++n === 3 && resolve({ ...servers, close: () => [shopSrv, frameSrv, modelSrv].forEach(s => s.close()) });
+    const done = () => ++n === 4 && resolve({ ...servers, close: () => [shopSrv, frameSrv, modelSrv, bwSrv].forEach(s => s.close()) });
     shopSrv.listen(PORTS.shop, '127.0.0.1', () => ((servers.shop = PORTS.shop), done()));
     frameSrv.listen(PORTS.frame, '127.0.0.1', () => ((servers.frame = PORTS.frame), done()));
     modelSrv.listen(PORTS.model, '127.0.0.1', () => ((servers.model = PORTS.model), done()));
+    bwSrv.listen(PORTS.bw, '127.0.0.1', () => ((servers.bw = PORTS.bw), done()));
   });
 }

@@ -7,8 +7,19 @@ import type { Gate } from '../../src/protocol';
 import { createBridgeHandler, startBridge } from '../../src/bridge';
 import { askBackground, type ChatGptStatus } from '../../src/llm/chatgpt-auth';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
+import { createVault, type Vault } from '../../src/vault';
 
 declare const browser: any;
+
+// Bitwarden: one client per URL. `agents`: for coding agents on the bridge (and tasks they delegate), which also
+// need their own opt-in.
+let vaultClient: { url: string; v: Vault } | null = null;
+function vaultFor(agents: boolean): Vault | null {
+  if (!settings.vault || !settings.vaultUrl.trim() || (agents && !settings.vaultAgents)) return null;
+  const url = settings.vaultUrl.trim();
+  if (vaultClient?.url !== url) vaultClient = { url, v: createVault(url) };
+  return vaultClient.v;
+}
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const log = $('log');
@@ -161,14 +172,6 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       setTimeout(() => resolve(yes), 100);
       return;
     }
-    // e2e:bridge build only (compiled out of dist/): the fixture server answers the card, as a person would.
-    const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
-    if (bridgeTest) {
-      fetch(`${bridgeTest}/e2e/approve?risk=${gate.risk}`)
-        .then(r => r.text())
-        .then(t => resolve(t === 'yes'), () => resolve(false));
-      return;
-    }
     const card = el('div', 'card');
     const label: Record<string, string> = {
       write: 'The agent wants to submit or send something',
@@ -177,8 +180,10 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       secret: 'The agent wants to type into a password or payment field',
       exfil: 'The agent wants to send a form to a different website',
       suspicious: 'The agent wants to act on page text that addresses AI agents (possible prompt injection)',
+      login: 'The agent wants to sign in with your Bitwarden login',
     };
     card.append(el('strong', '', label[gate.risk] ?? 'Approval needed'), el('div', 'hint', gate.what));
+    if (gate.warn) card.append(el('div', 'warn', gate.warn));
     if (a.text && gate.risk !== 'secret') card.append(el('div', 'hint', `text: ${a.text.slice(0, 200)}`));
     const row = el('div', 'row');
     const yes = el('button', 'primary', 'Allow once');
@@ -194,6 +199,14 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
     yes.onclick = () => done(true);
     no.onclick = () => done(false);
     running?.signal.addEventListener('abort', () => done(false), { once: true });
+    // e2e:bridge build only (compiled out of dist/): the card is shown as usual, and the fixture server answers it, as
+    // a person would.
+    const bridgeTest = import.meta.env.WXT_BRIDGE_TEST as string | undefined;
+    if (bridgeTest) {
+      fetch(`${bridgeTest}/e2e/approve?risk=${gate.risk}&what=${encodeURIComponent(gate.what)}`)
+        .then(r => r.text())
+        .then(t => row.isConnected && done(t === 'yes'), () => row.isConnected && done(false));
+    }
   });
 }
 
@@ -244,7 +257,7 @@ let warming: Promise<number> | null = null;
 function warm(): Promise<number> {
   if (!settings.model || Date.now() - warmedAt < 120000) return warming ?? Promise.resolve(0);
   warmedAt = Date.now();
-  const sys = settings.systemOverride || systemPrompt({ vision: settings.vision, reasoning: settings.reasoning });
+  const sys = settings.systemOverride || systemPrompt({ vision: settings.vision, reasoning: settings.reasoning, login: !!vaultFor(false) });
   warming = prewarm(settings, primer(sys));
   return warming;
 }
@@ -472,7 +485,7 @@ async function start(task: string, fromAgent?: { maxSteps?: number }, tabs: Atta
     const { tabId, windowId } = await targetTab();
     const ids = tabs.map(a => a.id);
     const host = createHost(tabId, windowId, ids);
-    let r = await runAgent({ task, settings: s, host, tabs: ids, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal });
+    let r = await runAgent({ task, settings: s, host, tabs: ids, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal, vault: vaultFor(!!fromAgent) });
     if (question) r = { success: false, answer: `The agent needs more information: ${question}` };
     (window as any).__lastResult = r;
     if (e2eUrl) {
@@ -694,15 +707,55 @@ $('test').onclick = async () => {
   }
 };
 
+// The master password goes to bw serve on this computer only: never stored, never in settings, never logged.
+const vaultOut = $('vaultOut');
+const vaultPw = $<HTMLInputElement>('vaultPw');
+const vaultNow = () => createVault(read().vaultUrl.trim() || DEFAULTS.vaultUrl);
+const STATE_TEXT: Record<string, [string, string]> = {
+  unlocked: ['Unlocked: the agent can sign in with your logins', 'ok'],
+  locked: ['Locked: enter your master password and press Unlock, or run bw unlock before bw serve', 'warn'],
+  unauthenticated: ['Not logged in: run bw login on this computer first', 'bad'],
+};
+async function showVault(p: Promise<{ state: string; email?: string; error?: string }>) {
+  const dot = $('vaultDot');
+  vaultOut.textContent = 'Checking…';
+  dot.className = 'dot';
+  const st = await p;
+  const [text, cls] = st.state === 'unreachable' ? [st.error ?? 'bw serve is not reachable', 'bad'] : (STATE_TEXT[st.state] ?? [st.state, '']);
+  vaultOut.textContent = `${text}${st.email ? ` · ${st.email}` : ''}${st.error && st.state !== 'unreachable' ? ` (${st.error})` : ''}`;
+  dot.className = `dot ${cls}`;
+}
+$('vaultCheck').onclick = () => void showVault(vaultNow().status());
+$('vaultUnlock').onclick = () => {
+  const pw = vaultPw.value;
+  vaultPw.value = '';
+  if (!pw) return void showVault(vaultNow().status());
+  void showVault(vaultNow().unlock(pw));
+};
+vaultPw.addEventListener('keydown', ev => {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  $('vaultUnlock').click();
+});
+$('vaultLock').onclick = () => {
+  const v = vaultNow();
+  void showVault(v.lock().then(() => v.status(), e => ({ state: 'unreachable', error: (e as Error).message })));
+};
+
 function openSettings() {
   fill(settings);
   $('testOut').textContent = '';
+  vaultOut.textContent = settings.vault ? 'Checking…' : 'Off';
+  $('vaultDot').className = 'dot';
+  vaultPw.value = '';
   dlg.showModal();
+  if (settings.vault) void showVault(vaultNow().status());
 }
 $('gear').onclick = openSettings;
 statusBtn.onclick = openSettings;
 
 dlg.addEventListener('close', async () => {
+  vaultPw.value = '';
   if (dlg.returnValue !== 'save') return;
   settings = read();
   await saveSettings(settings);
@@ -718,11 +771,15 @@ const bridgeHandle = createBridgeHandler({
   approve,
   busy: () => !!running,
   runTask: (task, maxSteps) => start(task, { maxSteps }),
+  vault: () => vaultFor(true),
   note: (text, ok) => add(el('div', `note${ok ? '' : ' err'}`, text)),
 });
 let bridge: { url: string; stop: () => void } | null = null;
 function connectBridge() {
-  const url = e2eUrl ? '' : settings.bridgeUrl.trim();
+  // e2e:bridge builds: Firefox also opens the real sidebar at install; only the panel tab under test may take agent
+  // commands, or the hub would split them between two panels.
+  const testSidebar = !!import.meta.env.WXT_BRIDGE_TEST && !new URLSearchParams(location.search).get('tabUrl');
+  const url = e2eUrl || testSidebar ? '' : settings.bridgeUrl.trim();
   if (bridge?.url === url) return;
   bridge?.stop();
   bridge = url ? { url, stop: startBridge(url, bridgeHandle, up => ($('agents').hidden = !up)) } : null;
