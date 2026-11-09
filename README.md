@@ -26,7 +26,9 @@ website access, the sidebar shows an *Allow on all sites* button.
 
 ## Working across tabs
 
-Type **@** in the task box (or click the **@** button) to attach other open tabs to the task, from any window. Keep
+The agent always works in the tab you're on. A **This tab** chip above the task box shows which one, and it follows you
+when you switch tabs. To give it more tabs, type **@** in the task box (or click the **@** button) and attach other
+open tabs, from any window. Keep
 typing to filter by title or address. ↑/↓ and Enter (or a click) pick a tab, and Esc closes the list. Each attached tab
 shows as a chip above the box, and × removes it. You can attach up to 6 tabs. For example: *"Is the hub on @shop-a.com
 cheaper than this one? Check @reviews.example too."*

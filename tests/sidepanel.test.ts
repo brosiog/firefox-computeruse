@@ -12,11 +12,13 @@ const TABS = [
   { id: 4, windowId: 2, index: 0, active: true, title: 'Reviews of hubs', url: 'https://reviews.test/hub', favIconUrl: 'https://reviews.test/favicon.ico', lastAccessed: 5 },
 ];
 
+let onActivated: () => void = () => {};
 const tick = () => new Promise(r => setTimeout(r, 0));
 const $ = (s: string) => document.querySelector(s) as HTMLElement;
 const input = () => $('#input') as HTMLTextAreaElement;
 const options = () => [...document.querySelectorAll('#mentions [role=option]')].map(o => o.textContent ?? '');
-const chips = () => [...document.querySelectorAll('#attachbar .tabchip .t')].map(c => c.textContent);
+// Attached chips only; the current tab's chip (always first) is checked on its own.
+const chips = () => [...document.querySelectorAll('#attachbar .tabchip:not(.current) .t')].map(c => c.textContent);
 const menuOpen = () => !$('#mentions').hidden;
 
 async function type(text: string) {
@@ -46,7 +48,12 @@ beforeAll(async () => {
   (globalThis as any).browser = {
     storage: { local: { get: async () => ({ settings: { model: '', bridgeUrl: '' } }), set: async () => {} } },
     permissions: { contains: async () => true, request: async () => true },
-    tabs: { query: async () => TABS, get: async (id: number) => TABS.find(t => t.id === id) },
+    tabs: {
+      query: async (q: any) => (q?.active ? TABS.filter(t => t.active && t.windowId === q.windowId) : TABS),
+      get: async (id: number) => TABS.find(t => t.id === id),
+      onActivated: { addListener: (f: () => void) => (onActivated = f) },
+      onUpdated: { addListener: () => {} },
+    },
     windows: { getCurrent: async () => ({ id: 1 }) },
     runtime: { sendMessage: async () => {} },
   };
@@ -55,16 +62,22 @@ beforeAll(async () => {
 });
 
 describe('@ tab mentions', () => {
-  it('lists readable tabs, this window first, other windows marked', async () => {
+  it('always shows the current tab as a fixed chip, with no ×', () => {
+    expect($('#attachbar').hidden).toBe(false);
+    const cur = $('#attachbar .tabchip.current');
+    expect(cur.textContent).toBe('This tabShop B');
+    expect(cur.querySelector('button')).toBeNull();
+  });
+
+  it('lists the other readable tabs, this window first, other windows marked', async () => {
     await type('compare @');
     expect(menuOpen()).toBe(true);
     const o = options();
-    expect(o.map(t => t.split('\n')[0])).toHaveLength(3);
-    expect(o[0]).toContain('Shop B');
-    expect(o[0]).toContain('current');
-    expect(o[1]).toContain('Shop A hubs');
-    expect(o[2]).toContain('Reviews of hubs');
-    expect(o[2]).toContain('other window');
+    // The current tab is always included, so it is not offered.
+    expect(o).toHaveLength(2);
+    expect(o[0]).toContain('Shop A hubs');
+    expect(o[1]).toContain('Reviews of hubs');
+    expect(o[1]).toContain('other window');
     expect(o.join()).not.toContain('Add-ons');
     // Only data: favicons are shown (a remote one would be fetched from the extension page).
     expect([...document.querySelectorAll('#mentions img')].map(i => (i as HTMLImageElement).src)).toEqual(['data:image/png;base64,AA==']);
@@ -73,6 +86,7 @@ describe('@ tab mentions', () => {
   it('filters by what follows the @, and Enter picks', async () => {
     await type('hub');
     expect(options().map(t => t.includes('hub'))).toEqual([true, true]);
+    await type('s');
     await key('Enter');
     expect(menuOpen()).toBe(false);
     expect(chips()).toEqual(['Shop A hubs']);
@@ -81,7 +95,6 @@ describe('@ tab mentions', () => {
 
   it('arrow keys and a click pick more tabs; picking an attached one detaches it', async () => {
     await type('and @');
-    await key('ArrowDown');
     await key('ArrowDown');
     expect($('#mentions [aria-selected=true]').textContent).toContain('Reviews');
     await key('Enter');
@@ -98,9 +111,21 @@ describe('@ tab mentions', () => {
     expect(menuOpen()).toBe(true);
     await key('Escape');
     expect(menuOpen()).toBe(false);
-    ($('#attachbar .tabchip button') as HTMLButtonElement).click();
+    ($('#attachbar .tabchip:not(.current) button') as HTMLButtonElement).click();
     expect(chips()).toEqual([]);
-    expect($('#attachbar').hidden).toBe(true);
+    // The current tab's chip stays.
+    expect($('#attachbar').hidden).toBe(false);
+  });
+
+  it('the current-tab chip follows a tab switch', async () => {
+    TABS[0].active = false;
+    TABS[1].active = true;
+    onActivated();
+    await tick();
+    await tick();
+    expect($('#attachbar .tabchip.current').textContent).toBe('This tabShop A hubs');
+    TABS[0].active = true;
+    TABS[1].active = false;
   });
 
   it('an @ inside a word or an email does not open the menu', async () => {

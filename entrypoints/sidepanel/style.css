@@ -101,6 +101,9 @@ main { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: 
   background: var(--chip); border: 1px solid var(--line); border-radius: 99px; padding: 1px 4px 1px 7px; font-size: 11.5px;
 }
 .tabchip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.tabchip.current { border-color: var(--accent); padding-right: 8px; }
+.tabchip .here { font-weight: 600; color: var(--accent); flex: none; }
+.msg.user .tabchip .here { color: inherit; }
 .tabchip button { border: none; background: none; padding: 0 4px; font-size: 13px; line-height: 1; color: var(--muted); }
 .tabchip img, .mentions img { width: 14px; height: 14px; flex: none; }
 .msg.user .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }

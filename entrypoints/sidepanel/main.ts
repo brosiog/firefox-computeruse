@@ -300,11 +300,38 @@ function tabChip(a: Attached, onRemove?: () => void): HTMLElement {
   return c;
 }
 
+// The tab the agent works in is always included: it leads the chip row (no ×) and follows the user's tab switches.
+let currentTab: Attached | null = null;
+
+function currentChip(a: Attached): HTMLElement {
+  const c = tabChip(a);
+  c.classList.add('current');
+  c.title = `The agent always works in the tab you're on.\n${a.title}\n${a.url}`;
+  c.prepend(el('span', 'here', 'This tab'));
+  return c;
+}
+
 function renderAttached() {
   attachbar.innerHTML = '';
+  if (currentTab) attachbar.append(currentChip(currentTab));
   for (const a of attached) attachbar.append(tabChip(a, () => ((attached = attached.filter(x => x.id !== a.id)), renderAttached())));
-  attachbar.hidden = !attached.length;
+  attachbar.hidden = !currentTab && !attached.length;
 }
+
+async function refreshCurrent() {
+  try {
+    const { tabId } = await targetTab();
+    const t = await browser.tabs.get(tabId);
+    currentTab = { id: t.id, title: t.title ?? '', url: t.url ?? '', icon: iconOf(t) };
+  } catch {
+    currentTab = null;
+  }
+  renderAttached();
+}
+browser.tabs.onActivated?.addListener(() => void refreshCurrent());
+browser.tabs.onUpdated?.addListener((id: number, info: any) => {
+  if (id === currentTab?.id && (info.title || info.url || info.favIconUrl)) void refreshCurrent();
+});
 
 /** The @word being typed at the caret, if any. */
 function mentionAt(): { start: number; q: string } | null {
@@ -330,14 +357,15 @@ async function updateMenu() {
   if (seq !== menuSeq) return;
   const words = at.q.split(/\s+/).filter(Boolean);
   const items = (all as any[])
-    .filter(t => !restrictedReason(t.url ?? ''))
+    // The current tab is always included (its chip leads the row), so it is not offered.
+    .filter(t => !restrictedReason(t.url ?? '') && t.id !== currentTab?.id)
     .filter(t => words.every(w => `${t.title ?? ''} ${t.url ?? ''}`.toLowerCase().includes(w)))
     // This window first, in tab order; then other windows, most recently used first.
     .sort((a, b) => (a.windowId === win.id ? 0 : 1) - (b.windowId === win.id ? 0 : 1) || (a.windowId === win.id ? a.index - b.index : (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0)))
     .slice(0, 40);
   menu = { start: at.start, items, sel: Math.min(menu?.sel ?? 0, Math.max(0, items.length - 1)) };
   mentions.innerHTML = '';
-  mentions.append(el('div', 'head', attached.length >= MAX_ATTACH ? `At most ${MAX_ATTACH} tabs` : 'Attach a tab the agent can read and use'));
+  mentions.append(el('div', 'head', attached.length >= MAX_ATTACH ? `At most ${MAX_ATTACH} tabs` : 'Add a tab (the one you are on is always included)'));
   if (!items.length) mentions.append(el('div', 'none', at.q ? `No tab matches "${at.q}"` : 'No other tabs the agent can read'));
   items.forEach((t, i) => {
     const on = attached.some(a => a.id === t.id);
@@ -358,7 +386,7 @@ async function updateMenu() {
     const txt = el('div', 'txt');
     txt.append(el('div', 'title', t.title || hostOf(t.url)), el('div', 'host', hostOf(t.url)));
     o.append(txt);
-    const tag = on ? '✓ attached' : t.active && t.windowId === win.id ? 'current' : t.windowId !== win.id ? 'other window' : '';
+    const tag = on ? '✓ attached' : t.windowId !== win.id ? 'other window' : '';
     if (tag) o.append(el('span', 'tag', tag));
     // mousedown, not click: the textarea keeps focus and the caret.
     o.addEventListener('mousedown', ev => {
@@ -424,6 +452,7 @@ async function start(task: string, fromAgent?: { maxSteps?: number }, tabs: Atta
   const bubble = el('div', 'msg user', fromAgent ? `agent: ${task}` : task);
   if (tabs.length) {
     const row = el('div', 'tabs');
+    if (currentTab) row.append(currentChip(currentTab));
     for (const a of tabs) row.append(tabChip(a));
     bubble.append(row);
   }
@@ -671,6 +700,7 @@ async function checkPermission() {
 $('grant').onclick = async () => {
   await browser.permissions.request({ origins: ['<all_urls>'] });
   void checkPermission();
+  void refreshCurrent();
 };
 
 (async () => {
@@ -678,6 +708,7 @@ $('grant').onclick = async () => {
   void refreshStatus();
   connectBridge();
   void checkPermission();
+  void refreshCurrent();
   if (e2eUrl) {
     // Test build: record what this page can reach before the run.
     const probes: string[] = [];
