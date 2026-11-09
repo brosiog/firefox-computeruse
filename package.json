@@ -18,7 +18,10 @@
     "bench:oracle": "node bench/run.mjs --model oracle --perturb all",
     "bench:replay": "node bench/replay.mjs",
     "bench:compare": "node bench/compare.mjs",
-    "bench:lint": "node bench/lint.mjs"
+    "bench:lint": "vite build -c bench/vite.core.config.ts && node bench/lint.mjs",
+    "check:build": "node scripts/check-build.mjs",
+    "lint:addon": "node scripts/lint-addon.mjs",
+    "check": "pnpm type-check && pnpm test && pnpm build && pnpm check:build && pnpm lint:addon && pnpm bench:lint"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",
