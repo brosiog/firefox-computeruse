@@ -173,9 +173,13 @@ export function nameOf(el: Element, max = 80): string {
   return clean(el.getAttribute('title') || el.getAttribute('data-tooltip') || el.getAttribute('name'), max);
 }
 
+/** Fields the password manager filled (usernames included): their values stay masked for the life of the page. */
+export const vaultFilled = new WeakSet<Element>();
+
 /** Fields whose values the model must never see. */
 export function isSecretField(el: Element): boolean {
   if (el.tagName !== 'INPUT') return false;
+  if (vaultFilled.has(el)) return true;
   const i = el as HTMLInputElement;
   if (i.type === 'password') return true;
   const ac = (i.getAttribute('autocomplete') || '').toLowerCase();

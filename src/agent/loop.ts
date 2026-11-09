@@ -8,6 +8,8 @@ import type { Settings } from '../settings';
 import { fence, toUrl, type Host } from '../browser/host';
 import { attachedBlock, buildMessages, compact, estimateTokens, systemPrompt, taskMessage, type AttachedTab, type Step } from './prompt';
 import { actionSchema, canonical, extractJson, parseAction, type Action } from './tools';
+import { login } from './login';
+import type { Vault } from '../vault';
 
 export type AgentEvent =
   | { type: 'step'; n: number }
@@ -55,6 +57,8 @@ export interface RunOptions {
   /** Tab ids the user attached to the task (the composer's @ mentions). Their text is read once, up front. */
   tabs?: number[];
   now?: () => Date;
+  /** Bitwarden, when the user turned logins on (and, for delegated tasks, allowed agents). Offers the login tool. */
+  vault?: Vault | null;
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>
@@ -66,16 +70,17 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 export function gatesFor(mode: Settings['approval']): Risk[] {
   // Cross-site form submissions and actions on text aimed at the agent are gated at every level: they are how
   // injected pages exfiltrate data or hijack the run. In full auto they are refused without asking (see consent).
+  // Password-manager fills ask below full auto (unless the user turned that ask off; see the login tool).
   const security: Risk[] = ['exfil', 'suspicious'];
   switch (mode) {
     case 'every':
-      return ['act', 'write', 'delete', 'pay', 'secret', ...security];
+      return ['act', 'write', 'delete', 'pay', 'secret', ...security, 'login'];
     case 'auto':
-      return ['pay', 'secret', ...security];
+      return ['pay', 'secret', ...security, 'login'];
     case 'off':
       return security;
     default:
-      return ['write', 'delete', 'pay', 'secret', ...security];
+      return ['write', 'delete', 'pay', 'secret', ...security, 'login'];
   }
 }
 
@@ -95,13 +100,14 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   const chat = o.chat ?? realChat;
   const t0 = Date.now();
   // Benchmarks swap the system prompt (ablations, variants) without rebuilding; normal settings never set this.
-  const system = s.systemOverride || systemPrompt({ vision: s.vision, reasoning: s.reasoning });
+  const vault = o.vault ?? null;
+  const system = s.systemOverride || systemPrompt({ vision: s.vision, reasoning: s.reasoning, login: !!vault });
   const date = (o.now?.() ?? new Date()).toISOString().slice(0, 10);
   // The task enables the executor's navigation-provenance and planted-answer tracking (see ExecContext.task).
-  const exec = createExecutor({ host, settings: s, ui, signal, task: o.task });
+  const exec = createExecutor({ host, settings: s, ui, signal, task: o.task, vault });
   const att = await readAttached(o, exec);
   const task = taskMessage(o.task, date, att.block);
-  const schema = actionSchema(s.vision, s.reasoning);
+  const schema = actionSchema(s.vision, s.reasoning, !!vault);
   let steps: Step[] = [];
   let prevRefs = new Set<string>();
   let lastKey = '';
@@ -200,7 +206,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     llmRetries = 0;
     modelMs = performance.now() - tModel;
 
-    const parsed = parseAction(res.text, s.vision);
+    const parsed = parseAction(res.text, s.vision, !!vault);
     if (!parsed.ok) {
       ui.event({ type: 'parse-error', raw: res.text, error: parsed.error });
       trace({ raw: res.text, action: null, parseError: parsed.error });
@@ -295,6 +301,10 @@ export interface ExecContext {
    * pages through the bridge, not through this executor; browser_task runs the full agent loop with both checks.
    */
   task?: string;
+  /** Bitwarden; without it the login tool fails. */
+  vault?: Vault | null;
+  /** Tests: how long the login tool waits for a page still rendering its sign-in form. */
+  loginRetryMs?: number;
 }
 
 export interface Executor {
@@ -460,6 +470,19 @@ export function createExecutor(o: ExecContext): Executor {
       }
       case 'screenshot':
         return { ok: true, text: 'a screenshot of the page (with refs drawn on it) is attached below.' };
+      case 'login':
+        if (!o.vault) return { ok: false, text: 'Bitwarden logins are not turned on. Ask the user to sign in themselves.' };
+        return login(a, urlBefore, {
+          host,
+          vault: o.vault,
+          // Every-action mode always asks; full auto never does; otherwise the user's Bitwarden setting decides.
+          ask: s.approval === 'every' || (s.approval !== 'off' && s.vaultAsk !== false),
+          gate,
+          approve: o.ui.approve,
+          declined,
+          aborted: () => signal.aborted,
+          retryMs: o.loginRetryMs,
+        });
       case 'ask': {
         const ans = await o.ui.ask(a.text ?? '');
         return ans === null ? { ok: false, text: 'the user did not answer.' } : { ok: true, text: `the user answered: ${ans}` };

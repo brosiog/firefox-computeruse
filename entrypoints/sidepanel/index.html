@@ -107,6 +107,24 @@
         <label>Agent bridge (lets Claude Code, Codex, … use this browser; empty = off)
           <input name="bridgeUrl" placeholder="http://127.0.0.1:47823" />
         </label>
+        <fieldset class="vault">
+          <legend>Bitwarden logins</legend>
+          <label class="check"><input name="vault" type="checkbox" /> Let the agent sign in with my saved logins (it never sees them)</label>
+          <p class="hint">Needs the Bitwarden CLI running <code>bw serve</code> on this computer, logged in and unlocked. Fills go only to the site a login is saved for.</p>
+          <label>bw serve URL <input name="vaultUrl" placeholder="http://localhost:8087" /></label>
+          <label class="check"><input name="vaultAsk" type="checkbox" /> Ask me before each sign-in</label>
+          <label class="check"><input name="vaultAgents" type="checkbox" /> Coding agents on the bridge may use logins too</label>
+          <div class="vault-status"><span id="vaultDot" class="dot"></span><span id="vaultOut">Not checked yet</span></div>
+          <div class="row">
+            <input id="vaultPw" type="password" autocomplete="off" placeholder="Master password" aria-label="Bitwarden master password" />
+            <button type="button" id="vaultUnlock">Unlock</button>
+          </div>
+          <div class="row">
+            <button type="button" id="vaultCheck">Check status</button>
+            <button type="button" id="vaultLock">Lock vault</button>
+          </div>
+          <p class="hint">The master password goes only to bw serve on this computer. It is never stored.</p>
+        </fieldset>
         <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
         <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>
         <label class="check"><input name="screenshotEachStep" type="checkbox" /> Attach a screenshot every step</label>

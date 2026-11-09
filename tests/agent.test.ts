@@ -189,9 +189,9 @@ describe('runAgent', () => {
 describe('approval levels', () => {
   it('maps each level to its gates', () => {
     const sec = ['exfil', 'suspicious'];
-    expect(gatesFor('every')).toEqual(['act', 'write', 'delete', 'pay', 'secret', ...sec]);
-    expect(gatesFor('ask')).toEqual(['write', 'delete', 'pay', 'secret', ...sec]);
-    expect(gatesFor('auto')).toEqual(['pay', 'secret', ...sec]);
+    expect(gatesFor('every')).toEqual(['act', 'write', 'delete', 'pay', 'secret', ...sec, 'login']);
+    expect(gatesFor('ask')).toEqual(['write', 'delete', 'pay', 'secret', ...sec, 'login']);
+    expect(gatesFor('auto')).toEqual(['pay', 'secret', ...sec, 'login']);
     expect(gatesFor('off')).toEqual(sec);
   });
 

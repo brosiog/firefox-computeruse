@@ -20,10 +20,11 @@ const NOTES: Partial<Record<string, string>> = {
   read: 'page text; query filters lines',
   find: 'search the whole page, returns refs',
   screenshot: 'look at the page, refs drawn on it',
+  login: 'on sign-in pages: fills the saved login (hidden from you); enter submits',
 };
 
-export function systemPrompt(opts: { vision: boolean; reasoning: boolean }): string {
-  const tools = toolsFor(opts.vision)
+export function systemPrompt(opts: { vision: boolean; reasoning: boolean; login?: boolean }): string {
+  const tools = toolsFor(opts.vision, !!opts.login)
     .map(t => (NOTES[t.name] ? `${t.sig}  ${NOTES[t.name]}` : t.sig))
     .join('\n');
   // Double quotes inside a string value end it early under grammar-constrained decoding and the reply degenerates

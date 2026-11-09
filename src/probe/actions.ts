@@ -316,14 +316,15 @@ function toggledState(el: Element): string {
   return '';
 }
 
-export function type(el: Element, text: string, clear: boolean, enter: boolean, ctx: ActCtx): ProbeResult {
+/** `perKeyMax`: text up to this length is typed key by key (default 80); longer text is pasted. */
+export function type(el: Element, text: string, clear: boolean, enter: boolean, ctx: ActCtx, perKeyMax = 80): ProbeResult {
   const { win, doc } = ctx;
   if (isDisabled(el)) return { ok: false, error: `${describe(el)} is disabled.` };
   const editable = isEditable(el) || (el as HTMLElement).isContentEditable;
   if (!isTextField(el) && !editable) {
     // Typing into a wrapper: use the first text field inside it.
     const inner = el.querySelector('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea, [contenteditable=""], [contenteditable=true]');
-    if (inner) return type(inner, text, clear, enter, ctx);
+    if (inner) return type(inner, text, clear, enter, ctx, perKeyMax);
     return { ok: false, error: `${describe(el)} is not a text field. Click it first if it opens one.` };
   }
   if ((el as HTMLInputElement).readOnly) return { ok: false, error: `${describe(el)} is read-only.` };
@@ -364,7 +365,7 @@ export function type(el: Element, text: string, clear: boolean, enter: boolean, 
       inputEvent(f, win, 'deleteContentBackward', null);
     }
     // Per-key events for short text so autocompletes and validators react as they do for a person.
-    if (text.length <= 80) {
+    if (text.length <= perKeyMax) {
       for (const ch of text) {
         const k: KeySpec = { key: ch === '\n' ? 'Enter' : ch, ctrl: false, shift: ch !== ch.toLowerCase(), alt: false, meta: false };
         const go = keyDown(f, k, win);

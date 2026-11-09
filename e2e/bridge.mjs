@@ -42,6 +42,11 @@ function mcpClient() {
 
 const srv = await start();
 state.config = { settings: {}, task: '', tabUrl: shop };
+// Bitwarden logins on, for agents too, through the fake bw serve (asks before each fill, answered below).
+const PW = 'correct-horse-battery-staple';
+const EMAIL = 'ada@example.test';
+state.bridgeSettings = { vault: true, vaultUrl: `http://localhost:${PORTS.bw}`, vaultAsk: true, vaultAgents: true };
+state.bw.items = [{ id: 'it1', type: 1, name: 'Hub Shop', login: { username: EMAIL, password: PW, uris: [{ uri: shop, match: null }] } }];
 const browser = await puppeteer.launch({
   browser: 'firefox',
   executablePath: ff,
@@ -119,6 +124,38 @@ try {
   check('gate: an allowed payment goes through', !yes.r.isError && state.orders.length === before + 1 && yes.text.includes('Order number') && state.gates.includes('pay'), yes.text);
   const no = await pay('no');
   check('gate: a declined payment is blocked and reported', no.r.isError && state.orders.length === before + 1 && no.text.includes('declined'), no.text);
+
+  // Bitwarden: the agent signs in without seeing the login. Fill first and look (the username is masked too), then
+  // fill and submit.
+  const secretFree = t => !t.includes(PW) && !t.includes(EMAIL);
+  state.approveNext = 'yes';
+  await call('browser_act', { actions: [{ tool: 'navigate', url: `${shop}/login` }], observe: false });
+  const fill = await call('browser_act', { actions: [{ tool: 'login' }] });
+  const fillText = fill?.content?.[0]?.text ?? '';
+  check(
+    'login: fills from Bitwarden, the page state masks both fields',
+    !fill?.isError && fillText.includes('filled the username and password') && /textbox "Email" value=•••/.test(fillText) && secretFree(fillText) && state.gates.includes('login'),
+    fillText,
+  );
+  check('login: bw serve saw no Origin header', state.bw.rejected === 0 && state.bw.calls.includes('GET /object/item/it1'), JSON.stringify(state.bw));
+  const signIn = async url => (await call('browser_act', { actions: [{ tool: 'navigate', url }], observe: false }), call('browser_act', { actions: [{ tool: 'login', enter: true }] }));
+  const sub = await signIn(`${shop}/login`);
+  const subText = sub?.content?.[0]?.text ?? '';
+  const last = state.logins[state.logins.length - 1];
+  check(
+    'login: enter:true signs in with the saved credentials',
+    !sub?.isError && subText.includes('Welcome back') && last?.where === 'shop' && last.email === EMAIL && last.password === PW && secretFree(subText),
+    subText + JSON.stringify(state.logins),
+  );
+  // The same login form on another origin: bw answered with the item anyway; the extension refuses to fill it.
+  const n0 = state.logins.length;
+  const phish = await signIn(`http://localhost:${PORTS.frame}/login`);
+  const phishText = phish?.content?.[0]?.text ?? '';
+  check('login: never fills another origin', phish?.isError && phishText.includes('no login saved for localhost') && state.logins.length === n0, phishText);
+  state.approveNext = 'no';
+  const dec = await signIn(`${shop}/login`);
+  const decText = dec?.content?.[0]?.text ?? '';
+  check('login: a declined sign-in fills nothing', dec?.isError && decText.includes('declined') && state.logins.length === n0 && !/value=•••/.test(decText), decText);
 } catch (e) {
   failed = true;
   console.error(e);

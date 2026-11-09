@@ -26,6 +26,9 @@ an error; the reason is printed.
   - `{"tool":"tab_switch","tab":2}`
   - `{"tool":"tab_close"}`
   - `{"tool":"wait","seconds":2}`
+  - `{"tool":"login","enter":true}` signs in with the user's saved Bitwarden login for this site, if the user turned that
+    on for agents (`fcu.mjs status` says). You never see the credentials. With several saved accounts, the result lists
+    them: repeat with `"option":"2"`.
 - `fcu.mjs task "<what to do, with every detail>"` hands the whole chore to the extension's local-model agent and
   prints its answer. If that agent needs information, it stops and prints its question. Call `task` again with the
   answer included.

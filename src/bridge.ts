@@ -7,6 +7,7 @@ import { createExecutor, type AgentUI, type Executor } from './agent/loop';
 import { parseAction, type Action } from './agent/tools';
 import { createHost, type Host } from './browser/host';
 import type { Settings } from './settings';
+import type { Vault } from './vault';
 
 export type BridgeCmd =
   | { op: 'status' }
@@ -31,6 +32,8 @@ export interface BridgeDeps {
   busy(): boolean;
   /** One line for the sidebar log, so the user sees what agents do. */
   note(text: string, ok: boolean): void;
+  /** Bitwarden for agents: null unless the user allowed coding agents to use logins. */
+  vault?(): Vault | null;
   /** Host factory (tests). */
   createHost?: typeof createHost;
   tabAlive?: (tabId: number) => Promise<boolean>;
@@ -72,7 +75,7 @@ export function createBridgeHandler(d: BridgeDeps) {
     // Rebuilt when settings change (approval mode); declines are kept per executor.
     if (!exec || execSettings !== d.settings()) {
       execSettings = d.settings();
-      exec = createExecutor({ host, settings: execSettings, ui: { approve: d.approve, ask: async () => null }, signal: new AbortController().signal });
+      exec = createExecutor({ host, settings: execSettings, ui: { approve: d.approve, ask: async () => null }, signal: new AbortController().signal, vault: d.vault?.() ?? null });
     }
     return { host, exec: exec! };
   }
@@ -95,7 +98,7 @@ export function createBridgeHandler(d: BridgeDeps) {
     if (!list.length) return { ok: false, text: 'no actions given. Example: [{"tool":"click","ref":"12"}]' };
     const parsed: Action[] = [];
     for (const [i, raw] of list.entries()) {
-      const p = parseAction(typeof raw === 'string' ? raw : JSON.stringify(raw), true);
+      const p = parseAction(typeof raw === 'string' ? raw : JSON.stringify(raw), true, !!d.vault?.());
       if (!p.ok) return { ok: false, text: `actions[${i}]: ${p.error.replace(/Reply with[^.]*\.\s*/g, '')}` };
       if (NOT_FOR_AGENTS.has(p.action.tool)) return { ok: false, text: `actions[${i}]: "${p.action.tool}" is not available here (use browser_observe with screenshot:true to look at the page).` };
       parsed.push(p.action);
@@ -159,7 +162,7 @@ export function createBridgeHandler(d: BridgeDeps) {
   async function run(cmd: BridgeCmd): Promise<BridgeResult> {
     switch (cmd.op) {
       case 'status':
-        return { ok: true, text: `connected; ${d.busy() ? 'the sidebar agent is busy' : 'idle'}; approvals: ${d.settings().approval}` };
+        return { ok: true, text: `connected; ${d.busy() ? 'the sidebar agent is busy' : 'idle'}; approvals: ${d.settings().approval}; Bitwarden logins: ${d.vault?.() ? 'on (login tool)' : 'off'}` };
       case 'observe':
         return observe(!!cmd.screenshot, cmd.budget);
       case 'act':
