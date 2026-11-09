@@ -124,6 +124,34 @@ const launch = () => puppeteer.launch({
 });
 let browser = await launch();
 let restarts = 0;
+// Waits until the model server answers (not for the oracle, which is served here).
+const modelUp = async () => {
+  if (opt.model === 'oracle') return;
+  for (let i = 0, said = false; ; i++) {
+    try {
+      const r = await fetch(`${modelUrl.replace(/\/$/, '')}/models`, { signal: AbortSignal.timeout(8000) });
+      if (r.ok) return;
+    } catch {}
+    if (!said) console.log(`model server unreachable at ${modelUrl}: pausing until it answers`), (said = true);
+    await new Promise(r => setTimeout(r, 15000));
+  }
+};
+srv.setGate(modelUp);
+// An episode lost to the model server (unreachable, 503 while its engine recovers) says nothing about the agent:
+// it is run again once the server is back, up to twice.
+const lostToServer = a => /^Model error: (cannot reach|model server error 5\d\d)/.test(a.answer ?? '');
+let retries = 0;
+// The job's own wall-clock limit, counted from when the extension picked it up (not while it waits for the server).
+const waitJob = (job, p) =>
+  Promise.race([
+    p,
+    new Promise(r => {
+      const tick = setInterval(() => {
+        if (job.startedAt && Date.now() - job.startedAt > job.timeoutMs + 30000) clearInterval(tick), r(null);
+      }, 1000);
+      p.then(() => clearInterval(tick));
+    }),
+  ]);
 const episodes = [];
 const t0 = Date.now();
 try {
@@ -133,8 +161,7 @@ try {
   for (const [idx, p] of done.entries()) {
     const job = jobs[idx];
     // Each job also has its own wall-clock limit, enforced here as well as in the extension.
-    const timedOut = new Promise(r => setTimeout(() => r(null), job.timeoutMs + 30000 + idx * 0));
-    const got = await Promise.race([p, timedOut]);
+    const got = await waitJob(job, p);
     // A hung job can wedge the extension's job loop (older builds wait forever on a question to the user), and then
     // every later job would "time out" with 0 steps. Restart Firefox so one hang costs one episode, not the run.
     if (!got) {
@@ -143,7 +170,15 @@ try {
       await browser.installExtension(extDir);
       restarts++;
     }
-    const a = analyze(job, got ? job.report : null);
+    let a = analyze(job, got ? job.report : null);
+    for (let t = 0; t < 2 && got && lostToServer(a); t++) {
+      retries++;
+      console.log(`    retrying ${job.key}: ${a.answer.slice(0, 90)}`);
+      job.startedAt = undefined;
+      const again = await waitJob(job, srv.retry(job));
+      a = analyze(job, again ? job.report : null);
+      if (!again) break;
+    }
     const ep = {
       id: job.id, key: job.key, config: job.config, split: job.split, family: job.family, perturb: job.perturb, seed: job.seed, rep: job.rep,
       goal: job.inst.goal, pass: a.pass, reason: a.reason, category: a.category, answer: a.answer, success: a.success,
@@ -160,7 +195,7 @@ try {
   srv.close();
 }
 
-const meta = { label: opt.label || stamp, when: new Date().toISOString(), model: modelId, wallSec: (Date.now() - t0) / 1000, restarts, opt };
+const meta = { label: opt.label || stamp, when: new Date().toISOString(), model: modelId, wallSec: (Date.now() - t0) / 1000, restarts, retries, opt };
 writeFileSync(resolve(outDir, 'episodes.jsonl'), episodes.map(e => JSON.stringify(e)).join('\n') + '\n');
 writeFileSync(resolve(outDir, 'meta.json'), JSON.stringify(meta, null, 1));
 const report = renderReport(episodes, meta);

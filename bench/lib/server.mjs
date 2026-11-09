@@ -9,6 +9,7 @@ import { applyAttack, attackFrame } from '../security/attacks.mjs';
 export function createServer(port) {
   const jobs = new Map();
   const queue = [];
+  let gate = null;
   const waiters = new Map();
   const origin = `http://127.0.0.1:${port}`;
   const altOrigin = `http://localhost:${port}`;
@@ -29,6 +30,9 @@ export function createServer(port) {
     const u = new URL(req.url, origin);
     try {
       if (u.pathname === '/e2e/next') {
+        // Hold the next job while the model server is unreachable: an outage then pauses the run instead of
+        // turning every remaining episode into a "model error".
+        if (gate) await gate();
         const job = queue.shift();
         if (!job) return send(res, 204, '');
         job.startedAt = Date.now();
@@ -132,6 +136,18 @@ export function createServer(port) {
     jobs,
     listen: () => new Promise(r => srv.listen(port, '127.0.0.1', r)),
     close: () => srv.close(),
+    setGate(fn) {
+      gate = fn;
+    },
+    /** Runs `job` again, next: the same task, fresh state. */
+    retry(job) {
+      job.report = undefined;
+      job.endedAt = undefined;
+      job.log = [];
+      job.inflight = 0;
+      queue.unshift(job);
+      return new Promise(r => waiters.set(job.id, r));
+    },
     enqueue(job) {
       job.base = `/t/${job.id}`;
       job.origin = origin;
