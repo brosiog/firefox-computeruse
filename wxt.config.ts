@@ -16,7 +16,7 @@ export default defineConfig({
   manifest: {
     name: 'Firefox Computer Use',
     description: 'A fast web agent for local models. Runs in the sidebar, drives the current tab.',
-    permissions: ['tabs', 'scripting', 'storage', 'webRequest', 'webRequestBlocking', 'webNavigation'],
+    permissions: ['tabs', 'scripting', 'storage', 'theme', 'webRequest', 'webRequestBlocking', 'webNavigation'],
     host_permissions: ['<all_urls>'],
     // Firefox's default MV3 CSP adds `upgrade-insecure-requests`, which silently rewrites http://<LAN model server> to
     // https:// and breaks every plain-HTTP local server off localhost (Splash/LM Studio/Ollama on another Mac).

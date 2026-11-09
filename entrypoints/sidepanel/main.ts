@@ -6,6 +6,7 @@ import { primer, systemPrompt } from '../../src/agent/prompt';
 import type { Gate } from '../../src/protocol';
 import { createBridgeHandler, startBridge } from '../../src/bridge';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
+import { followTheme } from '../../src/ui/theme';
 
 declare const browser: any;
 
@@ -232,7 +233,8 @@ async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{
   }
   add(el('div', 'msg user', fromAgent ? `agent: ${task}` : task));
   const ctrl = (running = new AbortController());
-  go.textContent = 'Stop';
+  go.title = 'Stop';
+  go.setAttribute('aria-label', 'Stop');
   go.classList.add('stop');
   let question: string | null = null;
   const agentAsk = async (q: string) => {
@@ -267,7 +269,8 @@ async function start(task: string, fromAgent?: { maxSteps?: number }): Promise<{
     return { success: false, answer: `The agent crashed: ${(e as Error).message ?? e}` };
   } finally {
     running = null;
-    go.textContent = 'Run';
+    go.title = 'Run';
+    go.setAttribute('aria-label', 'Run');
     go.classList.remove('stop');
     (window as any).__runDone = true;
   }
@@ -439,6 +442,8 @@ $('grant').onclick = async () => {
   await browser.permissions.request({ origins: ['<all_urls>'] });
   void checkPermission();
 };
+
+void followTheme(browser);
 
 (async () => {
   settings = await loadSettings();

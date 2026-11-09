@@ -16,7 +16,7 @@ const dist = resolve(root, 'dist');
 // Changing any of these is a deliberate act: update the expectation here in the same PR so reviewers see it.
 const EXPECT = {
   geckoId: 'firefox-computeruse@local',
-  permissions: ['scripting', 'storage', 'tabs', 'webNavigation', 'webRequest', 'webRequestBlocking'],
+  permissions: ['scripting', 'storage', 'tabs', 'theme', 'webNavigation', 'webRequest', 'webRequestBlocking'],
   hostPermissions: ['<all_urls>'],
   // Total bytes in dist/. The extension is ~93 kB today; the budget leaves room to grow, not to double.
   maxBytes: 120_000,

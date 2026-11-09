@@ -8,11 +8,15 @@
   </head>
   <body>
     <header>
-      <div class="brand">Computer Use</div>
+      <div class="brand"><img src="/icon.svg" alt="" />Computer Use</div>
       <span id="agents" class="pill ok" title="A coding agent is connected through the bridge" hidden>agents</span>
       <button id="status" class="pill" title="Model server">…</button>
-      <button id="new" class="icon" title="New task">＋</button>
-      <button id="gear" class="icon" title="Settings">⚙</button>
+      <button id="new" class="icon" title="New task" aria-label="New task">
+        <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
+      </button>
+      <button id="gear" class="icon" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 16 16"><path d="M2.5 4.5h6M12.5 4.5h1M2.5 11.5h1M7.5 11.5h6" /><circle cx="10.5" cy="4.5" r="2" /><circle cx="5.5" cy="11.5" r="2" /></svg>
+      </button>
     </header>
     <div id="perm" class="banner" hidden>
       Firefox has not granted this extension access to websites yet.
@@ -20,13 +24,19 @@
     </div>
     <main id="log">
       <div class="empty" id="empty">
-        <p>Tell the agent what to do in this tab.</p>
+        <img src="/icon.svg" alt="" />
+        <p class="title">What should I do in this tab?</p>
         <p class="hint">e.g. “Find the cheapest USB-C hub on this page and add it to the cart”</p>
       </div>
     </main>
     <form id="composer">
-      <textarea id="input" rows="2" placeholder="What should I do?" autocomplete="off"></textarea>
-      <button id="go" type="submit">Run</button>
+      <div class="field">
+        <textarea id="input" rows="2" placeholder="What should I do?" autocomplete="off"></textarea>
+        <button id="go" type="submit" class="primary" title="Run" aria-label="Run">
+          <svg class="i-run" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
+          <svg class="i-stop" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none" /></svg>
+        </button>
+      </div>
     </form>
 
     <dialog id="settings">
@@ -90,14 +100,16 @@
         <label>Agent bridge (lets Claude Code, Codex, … use this browser; empty = off)
           <input name="bridgeUrl" placeholder="http://127.0.0.1:47823" />
         </label>
-        <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
-        <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>
-        <label class="check"><input name="screenshotEachStep" type="checkbox" /> Attach a screenshot every step</label>
+        <div class="checks">
+          <label class="check"><input name="reasoning" type="checkbox" /> One-line “think” before each action</label>
+          <label class="check"><input name="vision" type="checkbox" /> Vision model (enables screenshots)</label>
+          <label class="check"><input name="screenshotEachStep" type="checkbox" /> Attach a screenshot every step</label>
+        </div>
         <div class="actions">
-          <button type="button" id="test">Test connection</button>
+          <button type="button" id="test" class="ghost">Test connection</button>
           <span id="testOut" class="hint"></span>
           <span class="spacer"></span>
-          <button value="cancel" formnovalidate>Cancel</button>
+          <button value="cancel" formnovalidate class="ghost">Cancel</button>
           <button value="save" id="save" class="primary">Save</button>
         </div>
       </form>
