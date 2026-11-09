@@ -202,4 +202,19 @@ const report = renderReport(episodes, meta);
 writeFileSync(resolve(outDir, 'report.md'), report);
 writeFileSync(resolve(outDir, 'failures.md'), renderFailures(episodes));
 console.log('\n' + report + `\n\nresults: ${outDir}`);
+// --min-pass <0..1>: exit 1 when the pass rate over all planned jobs (a job that never ran counts as a failure) is
+// below the bar. CI runs the oracle with --min-pass 1: anything short of 100% is an extension or harness bug.
+if (opt.minPass !== undefined) {
+  const bar = Number(opt.minPass);
+  const passed = episodes.filter(e => e.pass).length;
+  const rate = jobs.length ? passed / jobs.length : 0;
+  const line = `${passed}/${jobs.length} passed (${(rate * 100).toFixed(1)}%), bar ${(bar * 100).toFixed(1)}%`;
+  if (!(rate >= bar)) {
+    console.error(`\nbench gate FAILED: ${line}`);
+    for (const e of episodes.filter(e => !e.pass)) console.error(`  ${e.key}  ${e.category}: ${e.reason}`);
+    if (episodes.length < jobs.length) console.error(`  ${jobs.length - episodes.length} job(s) never ran (the run stopped on a stuck job)`);
+    process.exit(1);
+  }
+  console.log(`bench gate: ${line}`);
+}
 process.exit(0);
