@@ -432,6 +432,17 @@ export function createExecutor(o: ExecContext): Executor {
     return `blocked by safety policy: ${u.origin} was not given by the user and no page you saw links to it. ${s.webSearch ? 'Find the page with web_search first: its result links can then be opened. Or open' : 'Open'} pages by clicking their links; if you need this site, ask the user.`;
   }
 
+  // Pages where transcript already failed: a second call there gets told plainly that retrying will not help.
+  const noTranscript = new Set<string>();
+  const transcriptMiss = (r: { ok: boolean; text: string }, page: string) => {
+    const key = page.split('#')[0];
+    if (!noTranscript.has(key)) {
+      noTranscript.add(key);
+      return r;
+    }
+    return { ok: false, text: `${r.text.replace(/ ?If the video has a transcript[^.]*\./, '')} Calling transcript again on this page will not help: use what the page shows (description, chapters, comments) or another source.` };
+  };
+
   async function execute(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }> {
     const gate = gatesFor(s.approval);
     /** Asks the user; null when allowed, else the result to report. */
@@ -513,7 +524,7 @@ export function createExecutor(o: ExecContext): Executor {
         const yt = /^https:\/\/(www\.|m\.)?youtube\.com\/(watch|shorts|live)/.test(urlBefore) && host.playerCaptionUrl;
         const url = yt ? await host.playerCaptionUrl!().catch(() => null) : null;
         const r = await probe(url ? { ...cmd, url } : cmd);
-        if (r.ok || yt || !host.fetchCaption) return r;
+        if (r.ok || yt || !host.fetchCaption) return r.ok ? r : transcriptMiss(r, urlBefore);
         // Other players (TikTok, X, Vimeo, news sites): caption files the page's own data lists, then the file the
         // player itself fetches when its captions are switched on. Fetched by the extension, read as website text.
         const listed = await host.act(undefined, { op: 'captionSources' }, gate).catch(() => null);
@@ -534,7 +545,7 @@ export function createExecutor(o: ExecContext): Executor {
             return { ok: true, text: `<page>\n${fence(msg)}\n</page>` };
           }
         }
-        return r;
+        return transcriptMiss(r, urlBefore);
       }
       case 'find':
         return probe({ op: 'find', text: a.text ?? a.query ?? '', limit: 15 });
