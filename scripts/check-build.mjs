@@ -22,8 +22,8 @@ const EXPECT = {
   // and Bitwarden logins add ~23 kB (sign-in field finder, redaction, vault client); the themed chat-style sidebar adds
   // ~7 kB (browser-theme mapping, styles, icons), ~153 kB in all. The budget leaves room to grow, not to double.
   // The transcript tool adds ~11 kB (caption parsers for WebVTT/SRT/TTML/json3, YouTube's panel, TikTok's caption
-  // list, player-request capture); with web_search (~4 kB) and the context-window work (~5 kB) the build is ~178 kB.
-  maxBytes: 180_000,
+  // list, player-request capture); with web_search (~4 kB) and the context-window and reliability work (~7 kB) the merged build is ~181 kB.
+  maxBytes: 185_000,
 };
 // Strings that only exist in test-only code paths (tree-shaken from release builds): the background job loop, the
 // sidebar's e2e/bench harness, and the step traces the bench records.
