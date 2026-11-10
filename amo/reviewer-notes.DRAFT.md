@@ -99,7 +99,8 @@ hard-coded in the build. The default model URL is `localhost`.
 
 No analytics, telemetry or developer-side server. Page content and task text go to the model server the user configures,
 and to OpenAI only if the user chooses ChatGPT. The manifest declares the AMO data-collection categories
-`websiteContent` and `authenticationInfo` (`browser_specific_settings.gecko.data_collection_permissions` in `wxt.config.ts`).
+`browsingActivity` (tab addresses and titles), `websiteContent` and `authenticationInfo`
+(`browser_specific_settings.gecko.data_collection_permissions` in `wxt.config.ts`). The manifest requires Firefox 140.
 Full details are in the privacy policy (draft:
 `amo/privacy-policy.DRAFT.md`). [Owner to confirm the policy's final location and the AMO data-collection categories.]
 

@@ -10,10 +10,10 @@ const root = resolve(import.meta.dirname, '..');
 
 // code → why it is accepted. Remove an entry when the cause goes away.
 const ALLOWED = {
-  // data_collection_permissions is new in Firefox 140 (Android 142); older versions ignore the key, and we still
-  // support 128 ESR. AMO requires the key, so it stays.
-  KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION: 'data_collection_permissions vs strict_min_version 128',
-  KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION: 'data_collection_permissions vs strict_min_version 128',
+  // data_collection_permissions is new in Firefox 140 (Android 142). Desktop strict_min_version is 140, so the desktop
+  // warning is gone. Firefox for Android is not supported below 142 by this key; the add-on is desktop-only in practice
+  // and the warning stays until the Android floor is raised or the key is dropped for Android. AMO requires the key.
+  KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION: 'data_collection_permissions vs Firefox for Android (needs 142); desktop min is 140',
 };
 
 let out;

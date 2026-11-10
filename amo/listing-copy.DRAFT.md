@@ -46,8 +46,8 @@ Privacy: the extension has no server of its own. It has no analytics or telemetr
 Page content goes only to the model server you choose, and to OpenAI if you choose ChatGPT sign-in. Full details:
 [PRIVACY POLICY URL, owner to publish, see amo/privacy-policy.DRAFT.md].
 
-Requires Firefox 128 or later. The data-collection categories declared for this add-on are website content and
-authentication information.
+Requires Firefox 140 or later. The data-collection categories declared for this add-on are browsing activity (tab
+addresses and titles), website content and authentication information.
 
 ## Suggested categories
 

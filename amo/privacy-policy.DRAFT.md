@@ -45,7 +45,8 @@ Nothing leaves your computer unless you configure or use one of these features.
 **a) The model server you configure.** When you give the agent a task, the extension sends the model server:
 
 - the task text you typed, and the text of any other tabs you attached with `@`;
-- the text of the page the agent is reading, and the results of its actions;
+- the address (URL) and title of the page the agent is reading, the titles of your other open tabs, and the address and
+  title of any tab you attached with `@`, plus the text of those pages, and the results of its actions;
 - a screenshot of the page, only if you turn on vision (and only for vision-capable models);
 - the model's own replies and the agent's action history for the current task.
 
@@ -56,7 +57,7 @@ point it at a hosted provider, the data goes to that provider under its own term
 **b) ChatGPT plan (optional).** If you choose *Continue with ChatGPT*:
 
 - sign-in and token refresh go to OpenAI's sign-in service (`auth.openai.com`);
-- the page content and task text described in (a), and screenshots if vision is on, go to the ChatGPT API
+- the page content, tab addresses and titles and task text described in (a), and screenshots if vision is on, go to the ChatGPT API
   (`api.openai.com`) and count against your ChatGPT plan's usage. OpenAI's privacy policy applies to that data.
 
 **c) Bitwarden (optional, off by default).** The extension talks only to the local Bitwarden CLI API you run, by default
@@ -72,10 +73,11 @@ the agent and its provider.
 **Not done:** no advertising, no analytics, no crash reporting, no sale or sharing of data with third parties, and no
 data sent to the developer.
 
-**Data-collection categories declared to Mozilla (AMO):** `websiteContent` (page text and task text sent to the model
-server you configure, or to OpenAI with ChatGPT sign-in, and screenshots if vision is on) and `authenticationInfo`
-(the ChatGPT sign-in tokens, and the Bitwarden sign-in handling in section 3c). The extension does not declare any other
-category.
+**Data-collection categories declared to Mozilla (AMO):** `browsingActivity` (the addresses and titles of the current
+page, your other open tabs and attached tabs, sent to the model server you configure, or to OpenAI with ChatGPT
+sign-in), `websiteContent` (page text and task text sent to the same destinations, and screenshots if vision is on) and
+`authenticationInfo` (the ChatGPT sign-in tokens, and the Bitwarden sign-in handling in section 3c). The extension does
+not declare any other category.
 
 ## 4. Permissions and why they are needed
 
@@ -109,8 +111,7 @@ confirm where the policy is published, e.g. the AMO listing and the repository R
 
 - [ ] Confirm the developer name and contact.
 - [ ] Set the "Last updated" date.
-- [ ] Confirm the AMO data-collection categories. `wxt.config.ts` now declares `data_collection_permissions: { required:
-      ['websiteContent', 'authenticationInfo'] }`, which section 3 describes. Decide whether tab addresses and titles (sent to
-      the model with the `tabs` permission) also need `browsingActivity`; this draft does not declare it.
+- [ ] Confirm the AMO data-collection categories. `wxt.config.ts` declares `data_collection_permissions: { required:
+      ['browsingActivity', 'websiteContent', 'authenticationInfo'] }` (requires Firefox 140), which section 3 describes.
 - [ ] Confirm that the statements about ChatGPT token storage (plain form in the profile) and revocation match the shipped build.
 - [ ] Confirm where the policy will be published, and that the AMO listing links to it.

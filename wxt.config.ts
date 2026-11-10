@@ -34,10 +34,11 @@ export default defineConfig({
     browser_specific_settings: {
       gecko: {
         id: 'firefox-computeruse@local',
-        strict_min_version: '128.0',
+        strict_min_version: '140.0',
         // Page content goes to the model server the user configures (and to OpenAI with ChatGPT sign-in); the ChatGPT
-        // tokens and Bitwarden sign-in are authentication data. Values are from the add-on linter's category enum.
-        data_collection_permissions: { required: ['websiteContent', 'authenticationInfo'] },
+        // tokens and Bitwarden sign-in are authentication data; tab URLs and titles go to the model as part of the
+        // prompt (browsingActivity). Values are from the add-on linter's category enum.
+        data_collection_permissions: { required: ['browsingActivity', 'websiteContent', 'authenticationInfo'] },
       },
     },
   },
