@@ -56,6 +56,8 @@ export interface RunOptions {
   chat?: typeof realChat;
   /** Tab ids the user attached to the task (the composer's @ mentions). Their text is read once, up front. */
   tabs?: number[];
+  /** Text that opens the task message: the user's saved notes and earlier turns of this conversation. */
+  context?: string;
   now?: () => Date;
   /** Bitwarden, when the user turned logins on (and, for delegated tasks, allowed agents). Offers the login tool. */
   vault?: Vault | null;
@@ -106,7 +108,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   // The task enables the executor's navigation-provenance and planted-answer tracking (see ExecContext.task).
   const exec = createExecutor({ host, settings: s, ui, signal, task: o.task, vault });
   const att = await readAttached(o, exec);
-  const task = taskMessage(o.task, date, att.block);
+  const task = taskMessage(o.task, date, att.block, o.context);
   const schema = actionSchema(s.vision, s.reasoning, !!vault);
   let steps: Step[] = [];
   let prevRefs = new Set<string>();

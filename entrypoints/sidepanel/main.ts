@@ -6,6 +6,8 @@ import { primer, systemPrompt } from '../../src/agent/prompt';
 import type { Gate } from '../../src/protocol';
 import { createBridgeHandler, startBridge } from '../../src/bridge';
 import { askBackground, type ChatGptStatus } from '../../src/llm/chatgpt-auth';
+import { addNote, notesBlock, rememberRequest } from '../../src/memory';
+import { addTurn, loadChats, newChat, priorBlock, prune, saveChats, type Chat } from '../../src/chats';
 import { DEFAULTS, PRESETS, loadSettings, saveSettings, type Settings } from '../../src/settings';
 import { followTheme } from '../../src/ui/theme';
 import { createVault, type Vault } from '../../src/vault';
@@ -31,6 +33,9 @@ const PLACEHOLDER = 'Ask anything · type @ to add tabs';
 
 let settings: Settings = { ...DEFAULTS };
 let running: AbortController | null = null;
+// The conversation on screen: each new message sees the turns before it. `chats` is everything saved.
+let convo: Chat = newChat();
+let chats: Chat[] = [];
 let pendingAsk: ((v: string | null) => void) | null = null;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -503,9 +508,13 @@ async function start(task: string, fromAgent?: { maxSteps?: number }, tabs: Atta
     const { tabId, windowId } = await targetTab();
     const ids = tabs.map(a => a.id);
     const host = createHost(tabId, windowId, ids);
-    let r = await runAgent({ task, settings: s, host, tabs: ids, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal, vault: vaultFor(!!fromAgent) });
+    // Saved notes (those for the sites in play) and, from the sidebar, the conversation so far.
+    const urls = [await browser.tabs.get(tabId).then((t: any) => t.url ?? '', () => ''), ...tabs.map(a => a.url)];
+    const context = [notesBlock(s.notes ?? '', task, urls), fromAgent ? '' : priorBlock(convo.turns)].filter(Boolean).join('\n\n');
+    let r = await runAgent({ task, settings: s, host, tabs: ids, ui: { event: onEvent, approve, ask: fromAgent ? agentAsk : ask }, signal: ctrl.signal, vault: vaultFor(!!fromAgent), context });
     if (question) r = { success: false, answer: `The agent needs more information: ${question}` };
     (window as any).__lastResult = r;
+    if (!fromAgent && !e2eUrl && !question) void remember({ task, answer: r.answer, success: r.success, at: Date.now() });
     if (e2eUrl) {
       await fetch(`${e2eUrl}/e2e/report`, {
         method: 'POST',
@@ -554,6 +563,20 @@ $('composer').addEventListener('submit', ev => {
   if (!v) return;
   input.value = '';
   fit();
+  const note = rememberRequest(v);
+  if (note) {
+    // "remember that …" saves a note instead of running a task.
+    add(el('div', 'msg user', v));
+    settings = { ...settings, notes: addNote(settings.notes ?? '', note) };
+    void saveSettings(settings);
+    const n = el('div', 'note', `Saved to memory: ${note} · `);
+    const edit = el('a', undefined, 'edit');
+    edit.href = '#';
+    edit.onclick = ev => (ev.preventDefault(), openSettings());
+    n.append(edit);
+    add(n);
+    return;
+  }
   const tabs = attached;
   attached = [];
   renderAttached();
@@ -592,12 +615,80 @@ function wireSuggestions(root: HTMLElement) {
   }
 }
 wireSuggestions($('empty'));
-$('new').onclick = () => {
-  if (running) return;
+function showEmpty() {
   log.innerHTML = '';
   const e = emptyState.cloneNode(true) as HTMLElement;
   log.append(e);
   wireSuggestions(e);
+}
+
+/** Saves the finished turn into the current conversation (and applies the retention setting). */
+async function remember(turn: Parameters<typeof addTurn>[1]) {
+  convo = addTurn(convo, turn);
+  chats = prune([convo, ...chats.filter(c => c.id !== convo.id)], settings.keepChats);
+  try {
+    await saveChats(chats);
+  } catch {
+    // storage full or blocked: the conversation still works for this session
+  }
+}
+
+const histDlg = $<HTMLDialogElement>('historyDlg');
+const histList = $('histList');
+function renderHistory() {
+  histList.replaceChildren();
+  if (!chats.length) histList.append(el('div', 'hist-empty', 'Nothing saved yet.'));
+  for (const c of chats) {
+    const row = el('div', `hist-item${c.id === convo.id ? ' cur' : ''}`);
+    const open = el('button', 'hist-open');
+    open.type = 'button';
+    open.append(el('b', undefined, c.title || '(untitled)'), el('span', undefined, `${new Date(c.updated).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ${c.turns.length} message${c.turns.length === 1 ? '' : 's'}`));
+    open.onclick = () => openChat(c);
+    const del = el('button', 'hist-del', '×');
+    del.type = 'button';
+    del.title = 'Delete this conversation';
+    del.setAttribute('aria-label', 'Delete this conversation');
+    del.onclick = async () => {
+      chats = chats.filter(x => x.id !== c.id);
+      if (c.id === convo.id) startNewChat();
+      await saveChats(chats).catch(() => {});
+      renderHistory();
+    };
+    row.append(open, del);
+    histList.append(row);
+  }
+}
+function openChat(c: Chat) {
+  if (running) return;
+  convo = c;
+  log.innerHTML = '';
+  for (const t of c.turns) {
+    add(el('div', 'msg user', t.task));
+    add(el('div', `final${t.success ? '' : ' fail'}`, t.answer || (t.success ? 'Done.' : 'Not finished.')));
+  }
+  histDlg.close();
+  input.focus();
+}
+$('history').onclick = () => {
+  renderHistory();
+  histDlg.showModal();
+};
+$('histClose').onclick = () => histDlg.close();
+$('histClear').onclick = async () => {
+  if (!chats.length || !confirm('Delete all saved conversations?')) return;
+  chats = [];
+  startNewChat();
+  await saveChats(chats).catch(() => {});
+  renderHistory();
+};
+
+function startNewChat() {
+  convo = newChat();
+  showEmpty();
+}
+$('new').onclick = () => {
+  if (running) return;
+  startNewChat();
   attached = [];
   renderAttached();
   input.focus();
@@ -796,6 +887,8 @@ dlg.addEventListener('close', async () => {
   if (dlg.returnValue !== 'save') return;
   settings = read();
   await saveSettings(settings);
+  chats = prune(chats, settings.keepChats);
+  void saveChats(chats).catch(() => {});
   void refreshStatus();
   connectBridge();
 });
@@ -862,6 +955,9 @@ void followTheme(browser);
 
 (async () => {
   settings = await loadSettings();
+  // Old conversations past the retention window are deleted each time the sidebar opens.
+  chats = prune(await loadChats(), settings.keepChats);
+  void saveChats(chats).catch(() => {});
   void refreshStatus();
   connectBridge();
   void checkPermission();

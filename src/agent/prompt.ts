@@ -51,8 +51,8 @@ export interface Step {
   result: string;
 }
 
-export function taskMessage(task: string, date: string, attached?: string): string {
-  return `Task: ${task}\n(Today is ${date}.)${attached ? `\n\n${attached}` : ''}`;
+export function taskMessage(task: string, date: string, attached?: string, context?: string): string {
+  return `${context ? `${context}\n\n` : ''}Task: ${task}\n(Today is ${date}.)${attached ? `\n\n${attached}` : ''}`;
 }
 
 /** A tab the user attached, as read at the start of the run (see Host.readTab). */
