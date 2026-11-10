@@ -16,12 +16,14 @@ export default defineConfig({
   manifest: {
     name: 'Firefox Computer Use',
     description: 'A fast web agent for local models. Runs in the sidebar, drives the current tab.',
-    permissions: ['tabs', 'scripting', 'storage', 'theme', 'webRequest', 'webRequestBlocking', 'webNavigation'],
+    permissions: ['tabs', 'scripting', 'storage', 'theme', 'webRequest', 'webRequestBlocking'],
     host_permissions: ['<all_urls>'],
     // Firefox's default MV3 CSP adds `upgrade-insecure-requests`, which silently rewrites http://<LAN model server> to
     // https:// and breaks every plain-HTTP local server off localhost (Splash/LM Studio/Ollama on another Mac).
     content_security_policy: { extension_pages: "script-src 'self'; object-src 'self';" },
-    icons: { 64: 'icon.svg' },
+    // AMO's add-on icon comes from the `icons` key, so it gets PNGs at the sizes AMO and Firefox use. The SVG stays
+    // the toolbar button and sidebar icon (action / sidebar_action below).
+    icons: { 48: 'icons/icon-48.png', 96: 'icons/icon-96.png', 128: 'icons/icon-128.png' },
     action: { default_title: 'Toggle agent sidebar', default_icon: 'icon.svg' },
     commands: {
       _execute_sidebar_action: {

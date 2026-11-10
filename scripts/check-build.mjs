@@ -16,7 +16,7 @@ const dist = resolve(root, 'dist');
 // Changing any of these is a deliberate act: update the expectation here in the same PR so reviewers see it.
 const EXPECT = {
   geckoId: 'firefox-computeruse@local',
-  permissions: ['scripting', 'storage', 'tabs', 'theme', 'webNavigation', 'webRequest', 'webRequestBlocking'],
+  permissions: ['scripting', 'storage', 'tabs', 'theme', 'webRequest', 'webRequestBlocking'],
   hostPermissions: ['<all_urls>'],
   // Total bytes in dist/. ~146 kB: main is ~123 kB (prompt-injection defenses, Sign in with ChatGPT, @-attached tabs)
   // and Bitwarden logins add ~23 kB (sign-in field finder, redaction, vault client); the themed chat-style sidebar adds

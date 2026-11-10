@@ -6,7 +6,7 @@ points at something specific to change.
 
 ```sh
 node bench/run.mjs --model oracle                                    # self-test: all tasks solvable, harness floor
-node bench/run.mjs --model http://192.168.86.202:8000/v1 --model-id qwen3.8-27b-splash --seeds 1 --label base
+node bench/run.mjs --model http://<model-server>:8000/v1 --model-id <model-id> --seeds 1 --label base
 node bench/run.mjs ... --perturb all --split dev                    # tune on dev only
 node bench/run.mjs ... --config base --config 'b2500={"pageBudget":2500}' --config 'nothink={"reasoning":false}'
 node bench/run.mjs ... --config 'v2={"systemFile":"prompts/v2.txt"}' # try a system prompt without rebuilding

@@ -2,7 +2,7 @@
 // for that page) and re-ask them under prompt variants. No browser; one model call per point per variant, so a prompt
 // change gets a paired, step-level accuracy delta in minutes instead of a full suite run.
 //
-//   node bench/replay.mjs --from bench/.results/<run> --model http://192.168.86.202:8000/v1 --model-id qwen3.8-27b-splash
+//   node bench/replay.mjs --from bench/.results/<run> --model http://<model-server>:8000/v1 --model-id <model-id>
 //        [--variants base,no-rules,drop-rule-3|all] [--limit 40] [--pick hard|all]
 //
 // --pick hard (default) takes every step the original run got wrong plus an equal number of right ones, so both

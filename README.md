@@ -4,8 +4,8 @@
 
 A Firefox web agent built for **local models under 50B parameters**, running on macOS. It is a port and redesign of
 [Nanobrowser](https://github.com/nanobrowser/nanobrowser): the agent lives in the Firefox sidebar and drives the
-current tab. The default configuration targets the Splash server on the LAN Mac (`qwen3.8-27b-splash`). Any
-OpenAI-compatible endpoint works, as does Ollama's native API.
+current tab. The default configuration targets an OpenAI-compatible server on `localhost:1234` (LM Studio's port), with
+no model preselected. Any OpenAI-compatible endpoint works, as does Ollama's native API.
 
 The whole extension is about 83 kB: no framework, no AI SDK, no runtime dependencies.
 
@@ -49,8 +49,8 @@ one of them. Notes:
 
 | Preset | API | Notes |
 | --- | --- | --- |
-| **Splash (default)** | OpenAI-compatible, `http://192.168.86.202:8000/v1`, `qwen3.8-27b-splash`, 64K | Sends `reasoning_effort` (default `none`). The first request after idle release reloads the model (~30 s); the panel says so. |
-| LM Studio | `http://localhost:1234/v1` | |
+| **LM Studio (default)** | OpenAI-compatible, `http://localhost:1234/v1`, model picked from the server's list, 64K | |
+| Splash / vLLM on another machine | OpenAI-compatible, `http://<host>:8000/v1`, type the URL and model under *Other* | Sends `reasoning_effort` (default `none`). Servers that reload a model on first use (Splash) can take ~30 s on that first request; the panel says so. |
 | llama.cpp | `http://localhost:8080/v1` | Use `--jinja`; `cache_prompt` is sent. |
 | MLX (`mlx_lm.server`) | `http://localhost:8080/v1` | |
 | Ollama | native `/api/chat`, `http://localhost:11434` | Sends `num_ctx`, `keep_alive` and `think`. No `OLLAMA_ORIGINS` setup needed (see below). |
@@ -298,7 +298,7 @@ pnpm test           # unit tests (vitest + happy-dom): probe, parser, prompt-cac
 pnpm type-check
 pnpm e2e            # real headless Firefox + fixture shop + scripted OpenAI-compatible fake model
 pnpm e2e:bridge     # real headless Firefox driven through bridge/fcu.mjs (CLI)
-MODEL_URL=http://192.168.86.202:8000/v1 MODEL=qwen3.8-27b-splash pnpm e2e   # same task, real model
+MODEL_URL=http://<model-server>:8000/v1 MODEL=<model-id> pnpm e2e   # same task, real model
 ```
 
 The e2e task is "find the cheapest USB hub, order 2 for Ada Lovelace, report the order number". It covers:
