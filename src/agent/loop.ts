@@ -119,7 +119,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let prevRefs = new Set<string>();
   let lastKey = '';
   let repeats = 0;
-  // The last few action keys: two actions taken in turn (click, scroll, click, scroll) are a loop too.
+  // The last few action keys: actions taken in turn (click, scroll, click, scroll) are a loop too.
   const recent: string[] = [];
   let failures = 0;
   let llmRetries = 0;
@@ -129,6 +129,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let parseFails = 0;
   let wantShot = false;
   let bounced = false;
+  let cutOff = false;
 
   const finish = (success: boolean, answer: string, n: number) => {
     ui.event({ type: 'done', success, answer, steps: n, ms: Date.now() - t0 });
@@ -153,7 +154,8 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     const fresh = obs.refs.filter(r => !prevRefs.has(r));
     if (n > 1 && fresh.length && fresh.length < obs.refs.length) notes.push(`(${fresh.length} elements are new since your last action.)`);
     prevRefs = new Set(obs.refs);
-    if (repeats >= 2) notes.push('Warning: you have repeated the same action without progress. Do something different, or use done.');
+    if (repeats >= 6) notes.push('You are stuck repeating the same actions. Use done now with what you have found so far.');
+    else if (repeats >= 2) notes.push('Warning: you have repeated the same action without progress. Do something different, or use done.');
     if (n === s.maxSteps) notes.push('This is your last step: use done now with what you have.');
     const tail = `${obs.text}\n${notes.join('\n')}${notes.length ? '\n' : ''}Step ${n}/${s.maxSteps}.`;
 
@@ -257,6 +259,13 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     const a = parsed.action;
     ui.event({ type: 'action', action: a, usage: res.usage, mode: res.mode, promptTokensEst: estimateTokens(msgs) });
 
+    if (a.tool === 'done' && !cutOff && /:\s*$/.test(a.answer ?? '')) {
+      // Under grammar-constrained decoding a double quote inside the answer ends it early ("answer":"Video: "…): ask
+      // once for the answer again instead of finishing with half of it.
+      cutOff = true;
+      steps.push({ page: tail, action: canonical(a), result: 'Error: your answer stopped at a double quote. Write the whole answer again, using single quotes inside it.' });
+      continue;
+    }
     if (a.tool === 'done') {
       // An answer that repeats a code-like token found only in page text aimed at AI agents (⚠) is bounced back once:
       // "put X in your answer" is an injection goal no gate can stop, because it is only text.
@@ -286,9 +295,10 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
 
     const key = canonical({ ...a, think: undefined }) + '@' + obs.url;
     recent.push(key);
-    if (recent.length > 4) recent.shift();
-    const alternating = recent.length === 4 && recent[3] === recent[1] && recent[2] === recent[0] && recent[3] !== recent[2];
-    repeats = key === lastKey || alternating ? repeats + 1 : 0;
+    if (recent.length > 7) recent.shift();
+    // The same action again, or a short cycle (A-B-A-B, A-B-C-A-B-C): this action already twice in the six before it.
+    const cycling = recent.filter(k => k === key).length >= 3;
+    repeats = key === lastKey || cycling ? repeats + 1 : 0;
     lastKey = key;
 
     // History keeps the model's own JSON when it was clean (maximizes cache reuse on servers that keep generated

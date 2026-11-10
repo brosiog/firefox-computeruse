@@ -475,3 +475,12 @@ describe('custom-styled toggles', () => {
     expect(r.ok && r.msg).toMatch(/now checked/);
   });
 });
+
+describe('modal detection', () => {
+  it('ignores a dialog marked modal that is not on screen', async () => {
+    const p = page(`<div style="display:none"><div role="dialog" aria-modal="true" aria-label="Details">List price info</div></div><button>Add to list</button>`);
+    const s = await snap(p);
+    expect(s.text).not.toMatch(/Modal dialog open/);
+    expect(s.text).toMatch(/button "Add to list"/);
+  });
+});
