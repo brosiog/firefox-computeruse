@@ -3,7 +3,7 @@
 // llama.cpp/LM Studio/vLLM `json_schema`), and the easiest shape for small models to produce reliably.
 
 export type ToolName =
-  | 'click' | 'type' | 'select' | 'key' | 'scroll' | 'hover' | 'navigate' | 'back' | 'read' | 'find' | 'tab_new'
+  | 'click' | 'type' | 'select' | 'key' | 'scroll' | 'hover' | 'navigate' | 'back' | 'read' | 'find' | 'transcript' | 'tab_new'
   | 'tab_switch' | 'tab_close' | 'wait' | 'screenshot' | 'login' | 'ask' | 'done';
 
 export interface Action {
@@ -52,6 +52,7 @@ export const TOOLS: Spec[] = [
   { name: 'navigate', sig: '{"tool":"navigate","url":"example.com"}', doc: 'open a URL in this tab; plain words search the web', required: ['url'] },
   { name: 'back', sig: '{"tool":"back"}', doc: 'go back in history', required: [] },
   { name: 'read', sig: '{"tool":"read","query":"price"}', doc: 'get the page\'s full text (query filters to matching lines; offset pages through long text)', required: [] },
+  { name: 'transcript', sig: '{"tool":"transcript","query":"intro"}', doc: 'read the captions of the video on this page as timestamped text (query filters to matching lines; offset pages through long transcripts)', required: [] },
   { name: 'find', sig: '{"tool":"find","text":"Contact us"}', doc: 'search the whole page, including off-screen, for elements or text; returns refs you can use', required: ['text'] },
   { name: 'tab_new', sig: '{"tool":"tab_new","url":"..."}', doc: 'open a URL in a new tab and switch to it', required: ['url'] },
   { name: 'tab_switch', sig: '{"tool":"tab_switch","tab":2}', doc: 'switch to a tab by its number in the tab list', required: ['tab'] },
@@ -112,7 +113,7 @@ export function actionSchema(vision: boolean, reasoning: boolean, login = false)
 const TOOL_ALIASES: Record<string, ToolName> = {
   click_element: 'click', press: 'key', press_key: 'key', keypress: 'key', input: 'type', type_text: 'type', fill: 'type',
   input_text: 'type', goto: 'navigate', go_to: 'navigate', open: 'navigate', open_url: 'navigate', go_to_url: 'navigate',
-  search: 'find', search_page: 'find', extract: 'read', get_text: 'read', read_page: 'read', finish: 'done',
+  search: 'find', search_page: 'find', extract: 'read', get_text: 'read', get_transcript: 'transcript', captions: 'transcript', subtitles: 'transcript', read_page: 'read', finish: 'done',
   complete: 'done', answer: 'done', go_back: 'back', select_option: 'select', new_tab: 'tab_new', open_tab: 'tab_new',
   switch_tab: 'tab_switch', close_tab: 'tab_close', ask_user: 'ask', scroll_down: 'scroll', scroll_up: 'scroll',
   sign_in: 'login', signin: 'login', log_in: 'login', autofill: 'login', fill_login: 'login',
