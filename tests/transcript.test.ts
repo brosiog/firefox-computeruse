@@ -157,3 +157,49 @@ describe('YouTube player captions', () => {
     expect(toggleCaptions(doc, true)).toEqual({ ok: true, msg: 'was on' });
   });
 });
+
+describe('other players (TikTok, X, Vimeo, news sites)', () => {
+  it('recognises caption files by URL or content type', async () => {
+    const { isCaptionRequest } = await import('../src/captions');
+    expect(isCaptionRequest('https://cdn.example/a/b.vtt?sig=1')).toBe(true);
+    expect(isCaptionRequest('https://video.twimg.com/x/subs/en.srt')).toBe(true);
+    expect(isCaptionRequest('https://api.example/subs?id=3&format=webvtt')).toBe(true);
+    expect(isCaptionRequest('https://cdn.example/blob', 'text/vtt; charset=utf-8')).toBe(true);
+    expect(isCaptionRequest('https://www.youtube.com/api/timedtext?v=a')).toBe(true);
+    expect(isCaptionRequest('https://cdn.example/video.mp4')).toBe(false);
+    expect(isCaptionRequest('https://cdn.example/page', 'text/html')).toBe(false);
+  });
+
+  it('parses TTML/DFXP and tells caption formats apart by content', async () => {
+    const { parseCaptions, captionFileTranscript } = await import('../src/probe/transcript');
+    const ttml = '<tt xmlns="http://www.w3.org/ns/ttml" ttp:tickRate="10000000"><body><div><p begin="15000000t" end="2s">Hello<br/>world</p><p begin="00:01:02.000">Later.</p></div></body></tt>';
+    expect(parseCaptions(ttml)).toEqual([{ start: 1.5, text: 'Hello world' }, { start: 62, text: 'Later.' }]);
+    expect(parseCaptions(VTT)).toHaveLength(3);
+    expect(parseCaptions('{"events":[{"tStartMs":0,"segs":[{"utf8":"hi"}]}]}')).toEqual([{ start: 0, text: 'hi' }]);
+    expect(parseCaptions('<html>not captions</html>')).toEqual([]);
+    expect(captionFileTranscript(VTT, 'the player\'s captions', 0, 4000)).toMatch(/^Transcript from the player's captions, 3 lines/);
+    expect(captionFileTranscript('nothing', 'x', 0, 4000)).toBeNull();
+  });
+
+  it('lists TikTok\'s caption files for the video in the URL, creator captions before auto ones', async () => {
+    const { captionSources } = await import('../src/probe/transcript');
+    const data = { __DEFAULT_SCOPE__: { 'webapp.video-detail': { itemInfo: { itemStruct: { id: '7300000000000000001', video: { subtitleInfos: [
+      { LanguageCodeName: 'eng-US', Url: 'https://v16-webapp.tiktokcdn-us.com/asr.vtt', Format: 'webvtt', Source: 'ASR' },
+      { LanguageCodeName: 'eng-US', Url: 'https://v16-webapp.tiktokcdn-us.com/creator.vtt', Format: 'webvtt', Source: 'CC' },
+      { LanguageCodeName: 'eng-US', Url: 'https://evil.example/x.vtt', Format: 'webvtt', Source: 'CC' },
+    ] } } } } } };
+    const doc = at('https://www.tiktok.com/@someone/video/7300000000000000001', `<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">${JSON.stringify(data)}</script>`);
+    expect(captionSources(doc)).toEqual(['https://v16-webapp.tiktokcdn-us.com/creator.vtt', 'https://v16-webapp.tiktokcdn-us.com/asr.vtt']);
+    expect(captionSources(at('https://www.tiktok.com/@someone/video/7300000000000000002', doc.body.innerHTML))).toEqual([]);
+  });
+
+  it('switches a generic CC button by its label', async () => {
+    const { toggleCaptions } = await import('../src/probe/transcript');
+    const doc = at('https://x.com/a/status/1', '<button aria-label="Turn on captions"></button>');
+    const b = doc.querySelector('button')!;
+    b.addEventListener('click', () => b.setAttribute('aria-label', 'Turn off captions'));
+    expect(toggleCaptions(doc, true)).toEqual({ ok: true, msg: 'was off' });
+    expect(b.getAttribute('aria-label')).toBe('Turn off captions');
+    expect(toggleCaptions(at('https://x.com/', '<p>no player</p>'), true).ok).toBe(false);
+  });
+});

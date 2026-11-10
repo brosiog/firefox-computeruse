@@ -1,5 +1,6 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import { handleChatGptMessage } from '../src/llm/chatgpt-auth';
+import { isCaptionRequest } from '../src/captions';
 
 declare const browser: any;
 
@@ -23,7 +24,27 @@ export default defineBackground(() => {
     browser.sidebarAction.toggle();
   });
 
-  browser.runtime.onMessage.addListener((m: unknown) => handleChatGptMessage(m));
+  browser.runtime.onMessage.addListener((m: any) => {
+    if (m?.type === 'captions-for-tab') return Promise.resolve(captionLog.get(m.tabId) ?? []);
+    return handleChatGptMessage(m);
+  });
+
+  // 4. Caption files the tabs' own video players load (YouTube fetches them once, when the page loads, before the
+  //    agent asks). Only their URLs, the last 5 per tab, in memory; the transcript tool reads them for its own tab.
+  const captionLog = new Map<number, string[]>();
+  browser.webRequest.onHeadersReceived.addListener(
+    (d: { tabId: number; url: string; responseHeaders?: { name: string; value?: string }[] }) => {
+      if (d.tabId < 0) return;
+      const type = d.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type')?.value ?? '';
+      if (!isCaptionRequest(d.url, type)) return;
+      const list = (captionLog.get(d.tabId) ?? []).filter(u => u !== d.url);
+      list.push(d.url);
+      captionLog.set(d.tabId, list.slice(-5));
+    },
+    { urls: ['<all_urls>'], types: ['xmlhttprequest', 'media', 'other'] },
+    ['responseHeaders'],
+  );
+  browser.tabs.onRemoved.addListener((id: number) => captionLog.delete(id));
 
   // Every request the extension's own pages make (model servers, model lists) goes out without an Origin header.
   // Gating this on the configured server's origin raced with settings changes: the bench caught Splash answering

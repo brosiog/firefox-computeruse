@@ -1,6 +1,7 @@
 // The agent's handle on the browser: one tab at a time, the probe in all of its frames, tabs, navigation and
 // screenshots. Firefox WebExtension APIs only (no CDP).
 
+import { isCaptionRequest } from '../captions';
 import type { ProbeCmd, ProbeResult, Risk, Snapshot } from '../protocol';
 import { createRedactor } from '../redact';
 
@@ -56,8 +57,10 @@ export interface Host {
   frameAliases?(): number[];
   /** Values filled from the password manager: scrubbed from all text this host returns from now on. */
   redact?(values: { username?: string; password?: string; totp?: string }): void;
-  /** YouTube: the caption URL the tab's own player requests when its captions are switched on (null if none). */
+  /** The caption file the tab's own video player requests when its captions are switched on (null if none). */
   playerCaptionUrl?(): Promise<string | null>;
+  /** Fetches a caption file from the extension (no cookies, http(s), at most 2 MB of text). */
+  fetchCaption?(url: string): Promise<string | null>;
   /** Reads another tab's text without switching to it. Attached tabs are numbered right after the start tab. */
   readTab?(id: number, budget: number): Promise<TabRead>;
 }
@@ -348,27 +351,54 @@ export function createHost(initialTabId: number, windowId: number, attached: num
     },
 
     async playerCaptionUrl() {
-      let got: string | null = null;
-      const on = (d: { tabId: number; url: string }) => {
-        if (d.tabId === tabId && d.url.includes('/api/timedtext')) got = d.url;
-      };
-      browser.webRequest.onBeforeRequest.addListener(on, { urls: ['*://*.youtube.com/api/timedtext*'], tabId });
+      // What this tab's players already loaded (the background notes caption requests per tab), newest first, for
+      // the video in the address bar when the URL says which one.
       try {
-        const was = (await run(0, { op: 'ytCaptions', on: true })) as ProbeResult | undefined;
+        const seen: string[] = (await browser.runtime.sendMessage({ type: 'captions-for-tab', tabId })) ?? [];
+        const page = new URL((await browser.tabs.get(tabId)).url);
+        const vid = page.searchParams.get('v');
+        const match = [...seen].reverse().find(u => !vid || new URL(u).searchParams.get('v') === vid);
+        if (match) return match;
+      } catch {
+        // no background log; switch the captions on below
+      }
+      // Only this tab, only while its captions are being switched on, only responses that are caption files: the
+      // URL is one the site's own player chose, never one taken from page text.
+      let got: string | null = null;
+      const on = (d: { tabId: number; url: string; responseHeaders?: { name: string; value?: string }[] }) => {
+        if (d.tabId !== tabId || got) return;
+        const type = d.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type')?.value ?? '';
+        if (isCaptionRequest(d.url, type)) got = d.url;
+      };
+      browser.webRequest.onHeadersReceived.addListener(on, { urls: ['<all_urls>'], tabId, types: ['xmlhttprequest', 'media', 'other'] }, ['responseHeaders']);
+      try {
+        const was = (await run(0, { op: 'captions', on: true })) as ProbeResult | undefined;
         if (!was?.ok) return null;
         // Already on: the player fetched them before we listened; switch off and on to make it ask again.
         if (was.msg === 'was on') {
-          await run(0, { op: 'ytCaptions', on: false });
-          await run(0, { op: 'ytCaptions', on: true });
+          await run(0, { op: 'captions', on: false });
+          await run(0, { op: 'captions', on: true });
         }
         for (let i = 0; i < 24 && !got; i++) await new Promise(r => setTimeout(r, 250));
-        if (was.msg === 'was off') await run(0, { op: 'ytCaptions', on: false });
+        if (was.msg === 'was off') await run(0, { op: 'captions', on: false });
       } catch {
         return null;
       } finally {
-        browser.webRequest.onBeforeRequest.removeListener(on);
+        browser.webRequest.onHeadersReceived.removeListener(on);
       }
       return got;
+    },
+
+    async fetchCaption(url) {
+      if (!/^https?:\/\//.test(url)) return null;
+      try {
+        const r = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(15000) });
+        if (!r.ok) return null;
+        const text = await r.text();
+        return text.length > 2_000_000 ? null : text;
+      } catch {
+        return null;
+      }
     },
 
     async screenshot(marks) {

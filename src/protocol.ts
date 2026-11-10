@@ -15,8 +15,11 @@ export type ProbeCmd =
   | { op: 'find'; text: string; limit: number }
   /** The main video's captions as timestamped text (read-only; from the page's own site or its declared track). */
   | { op: 'transcript'; offset: number; budget: number; query?: string; url?: string }
-  /** YouTube: switches the player's captions on or off (so the player itself fetches them); says what they were. */
-  | { op: 'ytCaptions'; on: boolean }
+  /** Switches the video player's captions (its CC button) on or off, so the player itself fetches them; says what
+   *  they were. */
+  | { op: 'captions'; on: boolean }
+  /** Caption files the page's own data lists for the current video (TikTok), as a JSON array of URLs. */
+  | { op: 'captionSources' }
   | { op: 'settle'; quietMs: number; maxMs: number }
   | { op: 'marks'; show: boolean }
   /** Finds the sign-in fields (in the form around `id`, or the frame). Reports which exist, never their values. */
