@@ -260,15 +260,37 @@ export function captionFileTranscript(body: string, source: string, offset: numb
 }
 
 /** YouTube's transcript panel ("Show transcript"), when it is open: exactly what a person sees. */
+/** One transcript line as YouTube renders it, in either panel generation: a timestamp ("1:05"), sometimes its spoken
+ *  form for screen readers ("1 minute, 5 seconds"), then the words. Read by content, not class names, which change. */
+export function panelLine(raw: string): Cue | null {
+  const s = raw.replace(/\s+/g, ' ').trim();
+  const m = /^(\d{1,2}(?::\d{2}){1,2})\s+(?:(?:\d+\s+(?:hours?|minutes?|seconds?),?\s*)+)?(.*)$/i.exec(s);
+  if (!m || !m[2].trim()) return null;
+  return { start: seconds(m[1]), text: tidy(m[2]) };
+}
+
+/** The text of an element's leaves, separated by spaces (a timestamp and the words are separate elements). */
+const leafText = (el: Element) =>
+  Array.from(el.querySelectorAll('*'))
+    .filter(e => !e.children.length)
+    .map(e => e.textContent ?? '')
+    .join(' ') || (el.textContent ?? '');
+
 function youtubePanel(doc: Document): Cue[] {
-  const segs = doc.querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model');
+  const segs = doc.querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model, [class*="TranscriptSegment" i], [class*="transcript-segment" i]');
   const cues: Cue[] = [];
+  const seen = new Set<Element>();
   for (const s of segs) {
-    const ts = s.querySelector('.segment-timestamp, [class*=timestamp]')?.textContent?.trim() ?? '';
-    const text = tidy(s.querySelector('.segment-text, yt-formatted-string, [class*=text]')?.textContent ?? '');
-    if (text) cues.push({ start: /^\d+(:\d+)+$/.test(ts) ? seconds(ts) : 0, text });
+    // Nested matches (a segment's own parts carry "TranscriptSegment…" classes too): keep the outermost.
+    if (s.parentElement?.closest('ytd-transcript-segment-renderer, transcript-segment-view-model, [class*="TranscriptSegment" i], [class*="transcript-segment" i]')) continue;
+    if (seen.has(s)) continue;
+    seen.add(s);
+    const ts = s.querySelector('.segment-timestamp, [class*=imestamp]')?.textContent?.trim() ?? '';
+    const words = s.querySelector('.segment-text, yt-formatted-string.segment-text, [class*=SegmentText], [class*=segment-text]')?.textContent;
+    const cue = ts && words ? { start: /^\d+(:\d+)+$/.test(ts) ? seconds(ts) : 0, text: tidy(words) } : panelLine(leafText(s));
+    if (cue?.text) cues.push(cue);
   }
-  return cues;
+  return dedupe(cues);
 }
 
 async function trackCues(v: HTMLVideoElement, doc: Document, fetcher: typeof fetch): Promise<{ cues: Cue[]; lang: string } | null> {
@@ -306,7 +328,7 @@ async function openYoutubePanel(doc: Document, waitMs: number): Promise<Cue[]> {
   return [];
 }
 
-export async function transcript(doc: Document, offset: number, budget: number, query?: string, fetcher: typeof fetch = fetch, waitMs = 6000, playerUrl?: string): Promise<{ ok: true; msg: string } | { ok: false; error: string }> {
+export async function transcript(doc: Document, offset: number, budget: number, query?: string, fetcher: typeof fetch = fetch, waitMs = 12000, playerUrl?: string): Promise<{ ok: true; msg: string } | { ok: false; error: string }> {
   const yt = /(^|\.)youtube\.com$/.test(doc.location.hostname);
   let cues: Cue[] = [];
   let source = '';

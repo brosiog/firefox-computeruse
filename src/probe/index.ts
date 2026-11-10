@@ -120,7 +120,7 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
             return { ok: true, msg: text, links: refs.hrefs() };
           }
           case 'transcript': {
-            const r = await transcript(doc, cmd.offset, cmd.budget, cmd.query, fetch, 6000, cmd.url);
+            const r = await transcript(doc, cmd.offset, cmd.budget, cmd.query, fetch, 12000, cmd.url);
             return r.ok ? { ok: true, msg: r.msg } : r;
           }
           case 'captions':
