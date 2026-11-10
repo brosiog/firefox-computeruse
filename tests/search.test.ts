@@ -168,3 +168,27 @@ describe('web_search in the executor', () => {
     expect(auto.gates).toEqual([]);
   });
 });
+
+describe('reworded repeat searches', () => {
+  it('spots near-repeats by distinctive words, not different stores or products', async () => {
+    const { searchWords, overlap } = await import('../src/agent/loop');
+    const o = (a: string, b: string) => overlap(searchWords(a), searchWords(b));
+    expect(o('HexGears M2 mechanical keyboard price', 'HexGears M2 75% mechanical keyboard price USD')).toBeGreaterThanOrEqual(0.75);
+    expect(o('Sony WF-C510 price lowest 2026', 'Sony WF-C510 lowest price')).toBeGreaterThanOrEqual(0.75);
+    expect(o('Sony WF-C510 price amazon', 'Sony WF-C510 price bestbuy')).toBeLessThan(0.75);
+    expect(o('Sony WF-C510 price', 'SoundPeats C30 price')).toBeLessThan(0.75);
+  });
+
+  it('answers a near-repeat without searching again, and nudges after six searches', async () => {
+    let calls = 0;
+    const t = setup({ search: async () => (calls++, parseSearchResponse(sample(2))) });
+    expect((await t.run('{"tool":"web_search","query":"hexgears m2 price"}')).ok).toBe(true);
+    const again = await t.run('{"tool":"web_search","query":"HexGears M2 price USD 2026"}');
+    expect(again.ok).toBe(false);
+    expect(again.text).toMatch(/already searched for nearly this/);
+    expect(calls).toBe(1);
+    for (const q of ['alpha one', 'beta two', 'gamma three', 'delta four']) await t.run(`{"tool":"web_search","query":"${q}"}`);
+    const sixth = await t.run('{"tool":"web_search","query":"epsilon five"}');
+    expect(sixth.text).toMatch(/search 6 in this task: open the best result/);
+  });
+});
