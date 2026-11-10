@@ -35,33 +35,53 @@ export const MAX_CHAIN = 8;
 interface Spec {
   name: ToolName;
   sig: string;
-  doc: string;
   required: (keyof Action)[];
   vision?: boolean;
   /** Offered only when Bitwarden logins are on. */
   login?: boolean;
 }
 
+// What each tool does is said in comments: the prompt carries only the signatures and the NOTES in prompt.ts, so
+// descriptions here would ship in the bundle unread.
 export const TOOLS: Spec[] = [
-  { name: 'click', sig: '{"tool":"click","ref":"12"}', doc: 'click an element', required: ['ref'] },
-  { name: 'type', sig: '{"tool":"type","ref":"5","text":"...","enter":true}', doc: 'replace the text in a field; enter:true presses Enter after (submits search boxes and forms)', required: ['ref', 'text'] },
-  { name: 'select', sig: '{"tool":"select","ref":"7","option":"Large"}', doc: 'pick an option in a dropdown (combobox with options)', required: ['ref', 'option'] },
-  { name: 'key', sig: '{"tool":"key","key":"Escape"}', doc: 'press a key (Enter, Escape, Tab, ArrowDown, PageDown, Control+a); optional ref to focus first', required: ['key'] },
-  { name: 'scroll', sig: '{"tool":"scroll","dir":"down"}', doc: 'scroll the page one screen; optional ref scrolls the area containing it', required: ['dir'] },
-  { name: 'hover', sig: '{"tool":"hover","ref":"3"}', doc: 'move the mouse over an element (opens hover menus)', required: ['ref'] },
-  { name: 'navigate', sig: '{"tool":"navigate","url":"example.com"}', doc: 'open a URL in this tab; plain words search the web', required: ['url'] },
-  { name: 'back', sig: '{"tool":"back"}', doc: 'go back in history', required: [] },
-  { name: 'read', sig: '{"tool":"read","query":"price"}', doc: 'get the page\'s full text (query filters to matching lines; offset pages through long text)', required: [] },
-  { name: 'transcript', sig: '{"tool":"transcript","query":"intro"}', doc: 'read the captions of the video on this page as timestamped text (query filters to matching lines; offset pages through long transcripts)', required: [] },
-  { name: 'find', sig: '{"tool":"find","text":"Contact us"}', doc: 'search the whole page, including off-screen, for elements or text; returns refs you can use', required: ['text'] },
-  { name: 'tab_new', sig: '{"tool":"tab_new","url":"..."}', doc: 'open a URL in a new tab and switch to it', required: ['url'] },
-  { name: 'tab_switch', sig: '{"tool":"tab_switch","tab":2}', doc: 'switch to a tab by its number in the tab list', required: ['tab'] },
-  { name: 'tab_close', sig: '{"tool":"tab_close"}', doc: 'close the current tab', required: [] },
-  { name: 'wait', sig: '{"tool":"wait","seconds":2}', doc: 'wait for the page to finish loading or updating (max 10)', required: [] },
-  { name: 'screenshot', sig: '{"tool":"screenshot"}', doc: 'look at the page as an image, with refs drawn on it', required: [], vision: true },
-  { name: 'login', sig: '{"tool":"login","enter":true}', doc: 'sign in with the user\'s saved Bitwarden login for this site: fills the username, password or one-time code without showing them to you; enter:true submits; optional ref picks the form; option picks an account when several are listed', required: [], login: true },
-  { name: 'ask', sig: '{"tool":"ask","text":"Which size?"}', doc: 'ask the user a question when you are missing information only they have', required: ['text'] },
-  { name: 'done', sig: '{"tool":"done","answer":"...","success":true}', doc: 'finish: the answer or a summary of what you did; success:false if you could not do it', required: ['answer'] },
+  // click: click an element
+  { name: 'click', sig: '{"tool":"click","ref":"12"}', required: ['ref'] },
+  // type: replace the text in a field; enter:true presses Enter after (submits search boxes and forms)
+  { name: 'type', sig: '{"tool":"type","ref":"5","text":"...","enter":true}', required: ['ref', 'text'] },
+  // select: pick an option in a dropdown (combobox with options)
+  { name: 'select', sig: '{"tool":"select","ref":"7","option":"Large"}', required: ['ref', 'option'] },
+  // key: press a key (Enter, Escape, Tab, ArrowDown, PageDown, Control+a); optional ref to focus first
+  { name: 'key', sig: '{"tool":"key","key":"Escape"}', required: ['key'] },
+  // scroll: scroll the page one screen; optional ref scrolls the area containing it
+  { name: 'scroll', sig: '{"tool":"scroll","dir":"down"}', required: ['dir'] },
+  // hover: move the mouse over an element (opens hover menus)
+  { name: 'hover', sig: '{"tool":"hover","ref":"3"}', required: ['ref'] },
+  // navigate: open a URL in this tab; plain words search the web
+  { name: 'navigate', sig: '{"tool":"navigate","url":"example.com"}', required: ['url'] },
+  // back: go back in history
+  { name: 'back', sig: '{"tool":"back"}', required: [] },
+  // read: get the page's full text (query filters to matching lines; offset pages through long text)
+  { name: 'read', sig: '{"tool":"read","query":"price"}', required: [] },
+  // transcript: read the captions of the video on this page as timestamped text (query filters to matching lines; offset pages through long transcripts)
+  { name: 'transcript', sig: '{"tool":"transcript","query":"intro"}', required: [] },
+  // find: search the whole page, including off-screen, for elements or text; returns refs you can use
+  { name: 'find', sig: '{"tool":"find","text":"Contact us"}', required: ['text'] },
+  // tab_new: open a URL in a new tab and switch to it
+  { name: 'tab_new', sig: '{"tool":"tab_new","url":"..."}', required: ['url'] },
+  // tab_switch: switch to a tab by its number in the tab list
+  { name: 'tab_switch', sig: '{"tool":"tab_switch","tab":2}', required: ['tab'] },
+  // tab_close: close the current tab
+  { name: 'tab_close', sig: '{"tool":"tab_close"}', required: [] },
+  // wait: wait for the page to finish loading or updating (max 10)
+  { name: 'wait', sig: '{"tool":"wait","seconds":2}', required: [] },
+  // screenshot: look at the page as an image, with refs drawn on it
+  { name: 'screenshot', sig: '{"tool":"screenshot"}', required: [], vision: true },
+  // login: sign in with the user's saved Bitwarden login for this site: fills the username, password or one-time code without showing them to you; enter:true submits; optional ref picks the form; option picks an account when several are listed
+  { name: 'login', sig: '{"tool":"login","enter":true}', required: [], login: true },
+  // ask: ask the user a question when you are missing information only they have
+  { name: 'ask', sig: '{"tool":"ask","text":"Which size?"}', required: ['text'] },
+  // done: finish: the answer or a summary of what you did; success:false if you could not do it
+  { name: 'done', sig: '{"tool":"done","answer":"...","success":true}', required: ['answer'] },
 ];
 
 export function toolsFor(vision: boolean, login = false): Spec[] {

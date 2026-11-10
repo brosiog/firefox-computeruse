@@ -70,31 +70,7 @@ describe('transcript()', () => {
     expect(q.ok && q.msg).toContain('compare editors');
   });
 
-  it('reads YouTube captions from the page, preferring manual over auto-generated, same origin only', async () => {
-    const tracks = [
-      { baseUrl: 'https://www.youtube.com/api/timedtext?v=abc123&lang=en&kind=asr', languageCode: 'en', kind: 'asr' },
-      { baseUrl: 'https://www.youtube.com/api/timedtext?v=abc123&lang=en', languageCode: 'en' },
-    ];
-    const seen: string[] = [];
-    const doc = at('https://www.youtube.com/watch?v=abc123', `<video></video><script>var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":${JSON.stringify(tracks)},"audioTracks":[]}},"videoDetails":{"videoId":"abc123"}};</script>`);
-    const r = await transcript(doc, 0, 4000, undefined, fetchOf({ 'https://www.youtube.com/api/timedtext': JSON.stringify({ events: [{ tStartMs: 1000, segs: [{ utf8: 'Hello there.' }] }] }) }, seen));
-    expect(r.ok && r.msg).toMatch(/YouTube captions \(en\)/);
-    expect(r.ok && r.msg).not.toMatch(/auto-generated/);
-    expect(r.ok && r.msg).toContain('[0:01] Hello there.');
-    expect(seen).toEqual(['https://www.youtube.com/api/timedtext?v=abc123&lang=en&fmt=json3']);
-  });
-
-  it('after in-page navigation, loads the current video\'s watch page instead of the stale embedded data', async () => {
-    const stale = `<script>{"captionTracks":[{"baseUrl":"https://www.youtube.com/api/timedtext?v=old","languageCode":"en"}],"audioTracks":[],"videoDetails":{"videoId":"old"}}</script>`;
-    const fresh = `{"captionTracks":[{"baseUrl":"https://www.youtube.com/api/timedtext?v=new1","languageCode":"en","kind":"asr"}],"audioTracks":[],"videoDetails":{"videoId":"new1"}}`;
-    const seen: string[] = [];
-    const doc = at('https://www.youtube.com/watch?v=new1', `<video></video>${stale}`);
-    const r = await transcript(doc, 0, 4000, undefined, fetchOf({ 'https://www.youtube.com/watch?v=new1': fresh, 'https://www.youtube.com/api/timedtext?v=new1': JSON.stringify({ events: [{ tStartMs: 0, segs: [{ utf8: 'New video.' }] }] }) }, seen));
-    expect(r.ok && r.msg).toMatch(/auto-generated/);
-    expect(seen.some(u => u.includes('v=old'))).toBe(false);
-  });
-
-  it('refuses a caption URL on another site', async () => {
+  it('does not follow caption URLs named in YouTube page data (only the player\'s own request)', async () => {
     const seen: string[] = [];
     const doc = at('https://www.youtube.com/watch?v=x1x1x1', `<script>{"captionTracks":[{"baseUrl":"https://evil.example/c","languageCode":"en"}],"audioTracks":[],"videoDetails":{"videoId":"x1x1x1"}}</script>`);
     const r = await transcript(doc, 0, 4000, undefined, fetchOf({}, seen));

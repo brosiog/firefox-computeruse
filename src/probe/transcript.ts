@@ -111,51 +111,6 @@ function mainVideo(doc: Document): HTMLVideoElement | null {
   return vids.sort((a, b) => area(b) - area(a))[0];
 }
 
-function sameSite(url: string, doc: Document): boolean {
-  try {
-    return new URL(url, doc.baseURI).origin === doc.location.origin;
-  } catch {
-    return false;
-  }
-}
-
-/** YouTube's caption list for the current video, from the page's own player data or, after in-page navigation, from
- *  the watch page (same origin). Manual captions are preferred over auto-generated ones. */
-async function youtubeCues(doc: Document, fetcher: typeof fetch): Promise<{ cues: Cue[]; lang: string; auto: boolean } | { error: string } | null> {
-  const id = new URL(doc.location.href).searchParams.get('v') ?? /\/(?:shorts|live|embed)\/([\w-]{6,})/.exec(doc.location.pathname)?.[1];
-  if (!id) return null;
-  const tracksIn = (html: string) => {
-    const m = /"captionTracks":(\[.*?\])\s*,\s*"(?:audioTracks|translationLanguages|defaultAudioTrackIndex)"/s.exec(html);
-    const vid = /"videoDetails":\{"videoId":"([\w-]+)"/.exec(html)?.[1];
-    if (!m) return { tracks: null, vid };
-    try {
-      return { tracks: JSON.parse(m[1]) as any[], vid };
-    } catch {
-      return { tracks: null, vid };
-    }
-  };
-  let found = tracksIn(Array.from(doc.scripts, s => s.textContent ?? '').join('\n'));
-  if (found.vid !== id) {
-    // The page's embedded data is for the first video it loaded; YouTube navigates in place after that.
-    const r = await fetcher(`${doc.location.origin}/watch?v=${encodeURIComponent(id)}`, { credentials: 'same-origin' }).catch(() => null);
-    if (!r?.ok) return { error: 'could not load the video page to find its captions' };
-    found = tracksIn(await r.text());
-  }
-  if (!found.tracks?.length) return { error: 'this video has no captions' };
-  const want = (doc.documentElement.lang || 'en').slice(0, 2).toLowerCase();
-  const score = (t: any) => (t.kind === 'asr' ? 0 : 2) + (String(t.languageCode).toLowerCase().startsWith(want) ? 4 : String(t.languageCode).startsWith('en') ? 1 : 0);
-  const track = [...found.tracks].sort((a, b) => score(b) - score(a))[0];
-  if (!track?.baseUrl || !sameSite(track.baseUrl, doc)) return { error: 'the caption list points to another site; not fetched' };
-  const r = await fetcher(new URL(track.baseUrl, doc.baseURI).href + '&fmt=json3', { credentials: 'same-origin' }).catch(() => null);
-  const body = r?.ok ? await r.text() : '';
-  if (!body.trim()) return { error: 'YouTube did not return the captions' };
-  try {
-    return { cues: parseJson3(JSON.parse(body)), lang: String(track.languageCode), auto: track.kind === 'asr' };
-  } catch {
-    return { error: 'the captions came back in a form that could not be read' };
-  }
-}
-
 /** The caption request YouTube's own player made (seen by the extension), fetched again as json3. Only a
  *  youtube.com /api/timedtext URL is accepted. */
 async function playerCues(url: string, doc: Document, fetcher: typeof fetch): Promise<Cue[]> {
@@ -346,18 +301,11 @@ export async function transcript(doc: Document, offset: number, budget: number, 
       if (cues.length) source = `YouTube captions (${new URL(playerUrl).searchParams.get('lang') ?? '?'}${new URL(playerUrl).searchParams.get('kind') === 'asr' ? ', auto-generated' : ''})`;
     }
     if (!cues.length) {
-      const r = await youtubeCues(doc, fetcher);
-      if (r && 'error' in r) {
-        // YouTube often refuses caption requests without its player's token; its own transcript panel still works.
-        const panel = await openYoutubePanel(doc, waitMs);
-        if (panel.length) {
-          cues = panel;
-          source = 'YouTube transcript panel';
-        } else return { ok: false, error: `${r.error}. If the video has a transcript, open it (description → "Show transcript") and call transcript again.` };
-      } else if (r) {
-        cues = r.cues;
-        source = `YouTube captions (${r.lang}${r.auto ? ', auto-generated' : ''})`;
-      }
+      // No player request to reuse: YouTube's own transcript panel (it refuses bare caption requests without its
+      // player's token, so page data naming caption URLs is not followed).
+      cues = await openYoutubePanel(doc, waitMs);
+      if (cues.length) source = 'YouTube transcript panel';
+      else return { ok: false, error: 'YouTube did not return the captions. If the video has a transcript, open it (description → "Show transcript") and call transcript again.' };
     }
   }
   const v = mainVideo(doc);
