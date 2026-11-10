@@ -3,7 +3,7 @@ import { attachBudget, createExecutor, gatesFor, runAgent, type AgentEvent } fro
 import { buildMessages, compact, systemPrompt } from '../src/agent/prompt';
 import { parseAction } from '../src/agent/tools';
 import type { Host, Observation } from '../src/browser/host';
-import { chat, fitOutput, LlmError, outputBudget, outputReserve, stripThinking, type ChatMsg } from '../src/llm/client';
+import { chat, fitOutput, LlmError, outputBudget, outputReserve, parseContextError, stripThinking, type ChatMsg } from '../src/llm/client';
 import { DEFAULTS, type Settings } from '../src/settings';
 
 describe('parseAction', () => {
@@ -505,24 +505,48 @@ describe('output budget and window fit', () => {
     expect(fitOutput(32768, 9000, msgs)).toBe(256);
   });
 
-  it('sends the clamped max_tokens and reports a cut-off (thinking) reply as a length error', async () => {
-    const sent: number[] = [];
-    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => (sent.push(JSON.parse(String(init.body)).max_tokens), ok('length')));
-    const e = await chat(cfg({ effort: 'xhigh', contextWindow: 40000 }), msgs, null, AbortSignal.timeout(5000)).catch(x => x);
-    expect(e).toBeInstanceOf(LlmError);
-    expect(e.kind).toBe('length');
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toBeLessThan(40000 - 10000);
+  it('parses vLLM and llama.cpp overflow messages', () => {
+    expect(parseContextError("This model's maximum context length is 65536 tokens. However, you requested 8192 output tokens and your prompt contains at least 60000 input tokens")).toEqual({ ctx: 65536, prompt: 60000 });
+    expect(parseContextError('request (70000 tokens) exceeds the available context size (65536 tokens)')).toEqual({ ctx: 65536, prompt: 70000 });
   });
 
-  it('turns context_length_exceeded into a context error without downgrading structured output', async () => {
-    const sent: unknown[] = [];
+  it('sends the clamped max_tokens and retries a cut-off (thinking) reply with a larger budget', async () => {
+    const sent: number[] = [];
     vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {
-      sent.push(JSON.parse(String(init.body)).response_format);
-      return new Response(JSON.stringify({ error: { message: "This model's maximum context length is 65536 tokens.", code: 'context_length_exceeded' } }), { status: 400 });
+      sent.push(JSON.parse(String(init.body)).max_tokens);
+      return sent.length === 1 ? ok('length') : ok();
     });
-    const e = await chat(cfg({ effort: 'none' }), msgs, { type: 'object' }, AbortSignal.timeout(5000)).catch(x => x);
+    const r = await chat(cfg({ effort: 'high' }), msgs, null, AbortSignal.timeout(5000));
+    expect(r.text).toBe('{"tool":"done"}');
+    expect(sent).toEqual([24576, 49152]);
+  });
+
+  it('gives up on a cut-off reply with a length error when the window has no more room', async () => {
+    vi.stubGlobal('fetch', async () => ok('length'));
+    const e = await chat(cfg({ effort: 'xhigh', contextWindow: 45000 }), msgs, null, AbortSignal.timeout(5000)).catch(x => x);
+    expect(e).toBeInstanceOf(LlmError);
+    expect(e.kind).toBe('length');
+  });
+
+  it('learns the real window from a context_length_exceeded 400 and retries without downgrading structured output', async () => {
+    const sent: { max: number; fmt: unknown }[] = [];
+    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {
+      const b = JSON.parse(String(init.body));
+      sent.push({ max: b.max_tokens, fmt: b.response_format?.type });
+      if (sent.length === 1)
+        return new Response(JSON.stringify({ error: { message: "This model's maximum context length is 65536 tokens. However, you requested 32768 output tokens and your prompt contains at least 40000 input tokens", code: 'context_length_exceeded' } }), { status: 400 });
+      return ok();
+    });
+    const r = await chat(cfg({ effort: 'xhigh' }), msgs, { type: 'object' }, AbortSignal.timeout(5000));
+    expect(r.text).toBe('{"tool":"done"}');
+    expect(sent[1].max).toBeLessThanOrEqual(65536 - 40000 - 256);
+    expect(sent[1].fmt).toBe(sent[0].fmt);
+  });
+
+  it('throws a context error when the prompt itself does not fit (the loop then compacts)', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: { message: 'maximum context length is 1000 tokens, prompt contains at least 5000 input tokens', code: 'context_length_exceeded' } }), { status: 400 }));
+    const e = await chat(cfg({ effort: 'none' }), msgs, null, AbortSignal.timeout(5000)).catch(x => x);
+    expect(e).toBeInstanceOf(LlmError);
     expect(e.kind).toBe('context');
-    expect(sent).toHaveLength(1);
-});
+  });
 });

@@ -114,6 +114,9 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let repeats = 0;
   let failures = 0;
   let llmRetries = 0;
+  // Halved each time the server says the prompt does not fit, so compaction gets stricter until it does.
+  let ctxShrink = 1;
+  let ctxHits = 0;
   let parseFails = 0;
   let wantShot = false;
   let bounced = false;
@@ -148,9 +151,9 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     // Context budget: leave room for the model's output (and its thinking, if on).
     const mode = s.history ?? 'extend';
     const fixed = estimateTokens(buildMessages(system, task, [], tail, images));
-    const room = s.contextWindow - outputReserve(s) - 256;
+    const room = (s.contextWindow - outputReserve(s) - 256) * ctxShrink;
     // Attached tabs are part of the fixed opening, not history: they do not eat into the history budget.
-    const budget = mode === 'extend' ? Math.min(room, Math.max(4000, s.historyBudget ?? 16000) + att.tokens) : room;
+    const budget = Math.floor(mode === 'extend' ? Math.min(room, Math.max(4000, s.historyBudget ?? 16000) + att.tokens) * ctxShrink : room);
     const c = compact(steps, budget, fixed, mode);
     if (c.changed) {
       steps = c.steps;
@@ -193,11 +196,15 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
       if (signal.aborted) return finish(false, 'Stopped.', n - 1);
       const msg = (e as Error).message ?? String(e);
       if (e instanceof LlmError && e.kind === 'context') {
-        ui.event({ type: 'error', text: msg });
-        return finish(false, `The request did not fit the model server's context window. Set Settings → Context window to the server's real size (and check the server's own limit), or lower Model thinking, then run the task again. (${msg})`, n - 1);
+        if (++ctxHits > 3)
+          return finish(false, `The conversation no longer fits the model server's context window, even after compacting. Set Settings → Context window to the server's real size (and check the server's own limit), or lower Model thinking, then run the task again. (${msg})`, n - 1);
+        ctxShrink /= 2;
+        ui.event({ type: 'error', text: `${msg} — compacting older steps and retrying` });
+        n--;
+        continue;
       }
       if (e instanceof LlmError && e.kind === 'length') {
-        // Thinking used the whole output budget: tell the model and let it try again, at most a few times.
+        // Thinking used the whole output budget, even raised as far as the window allows: tell the model, bounded.
         ui.event({ type: 'parse-error', raw: '', error: msg });
         if (++parseFails >= 3) return finish(false, `The model kept running out of output budget before answering: ${msg}`, n);
         steps.push({ page: tail, action: '(no answer: output budget used up while thinking)', result: 'Error: you ran out of output tokens while thinking. Think briefly and answer with one action.' });

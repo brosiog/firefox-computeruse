@@ -51,7 +51,7 @@ export class LlmError extends Error {
 
 type Level = 'schema' | 'json' | 'off';
 const LADDER: Level[] = ['schema', 'json', 'off'];
-const learned = new Map<string, { level: Level; noThinkOk: boolean; extrasOk: boolean }>();
+const learned = new Map<string, { level: Level; noThinkOk: boolean; extrasOk: boolean; ctx?: number }>();
 
 export function isLocalUrl(u: string): boolean {
   try {
@@ -82,12 +82,24 @@ const MARGIN = 256;
 
 /** max_tokens that fits: never more than the window minus the (padded) prompt minus a margin, so prompt + output
  *  cannot exceed the window. At least min(256, want) so a nearly full prompt still gets a request the server can judge. */
-export function fitOutput(want: number, ctx: number, msgs: ChatMsg[]): number {
-  const prompt = Math.ceil(estimateTokens(msgs) * 1.1);
+export function fitOutput(want: number, ctx: number, msgs: ChatMsg[], knownPrompt = 0): number {
+  const prompt = Math.max(knownPrompt, Math.ceil(estimateTokens(msgs) * 1.1));
   return Math.max(Math.min(want, ctx - prompt - MARGIN), Math.min(256, want));
 }
 
 const CTX_RE = /context[_ ]length|context[_ ]window|context size|maximum context|too many (input )?tokens|exceed(s|ed)? (the )?(model|available|max)/i;
+
+/** Window and prompt size out of a vLLM / llama.cpp / OpenAI "too long" message, when it states them. */
+export function parseContextError(msg: string): { ctx?: number; prompt?: number } {
+  const num = (re: RegExp) => {
+    const m = re.exec(msg);
+    return m ? Number(m[1] ?? m[2]) : undefined;
+  };
+  return {
+    ctx: num(/maximum context length is (\d+)|context size \((\d+)/i),
+    prompt: num(/prompt contains at least (\d+)|request \((\d+) tokens/i) ?? num(/(\d+) input tokens|resulted in (\d+) tokens/i),
+  };
+}
 
 const trimSlash = (u: string) => u.replace(/\/+$/, '');
 
@@ -147,11 +159,16 @@ export async function chat(
       noThinkOk: true,
       extrasOk: true,
     }),
-    // Output never exceeds what the window leaves after the prompt.
-    maxOut: fitOutput(outputBudget(s), s.contextWindow, msgs),
+    maxOut: 0,
+    promptFloor: 0,
   };
   if (!schema) state.level = 'off';
-  for (let attempt = 0; attempt < 5; attempt++) {
+  let outMult = 1;
+  let ctxTries = 0;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    // Output never exceeds what the window leaves after the prompt (the server's window, if it told us a smaller one).
+    const ctx = Math.min(s.contextWindow, state.ctx ?? Infinity);
+    state.maxOut = fitOutput(Math.floor(outputBudget(s) * outMult), ctx, msgs, state.promptFloor);
     try {
       const r =
         s.kind === 'ollama'
@@ -165,9 +182,28 @@ export async function chat(
       if (signal.aborted) throw e;
       const err = e as LlmError;
       const msg = (err.message || '').toLowerCase();
-      // A cut-off reply, or a prompt the server says is too long: no feature downgrade fixes these; the caller decides.
-      if (err.kind === 'length') throw e;
-      if ((err.status === 400 || err.status === 422) && CTX_RE.test(msg)) throw new LlmError(err.message, err.status, 'context');
+      // Output budget used up (usually thinking): ask again with double, as far as the window allows; then the caller
+      // decides. No feature downgrade fixes this.
+      if (err.kind === 'length') {
+        const more = fitOutput(state.maxOut * 2, ctx, msgs, state.promptFloor);
+        if (more > state.maxOut) {
+          outMult = more / outputBudget(s);
+          continue;
+        }
+        throw err;
+      }
+      // Window overflow: learn the real window and prompt size and retry with less output once; if it still does not
+      // fit, the prompt itself is too big: hand the caller a recoverable error so it compacts.
+      if ((err.status === 400 || err.status === 422) && CTX_RE.test(msg)) {
+        const info = parseContextError(err.message || '');
+        if (info.ctx && info.ctx < ctx) state.ctx = info.ctx;
+        if (info.prompt) state.promptFloor = info.prompt;
+        if (ctxTries++ === 0 && state.maxOut > 256) {
+          outMult = Math.min(outMult, (info.prompt ? 1 : 0.5) * (state.maxOut / outputBudget(s)));
+          continue;
+        }
+        throw new LlmError(`the prompt does not fit the model's context window (${err.message.slice(0, 200)})`, err.status, 'context');
+      }
       if (err.status !== 400 && err.status !== 422 && err.status !== 500) throw e;
       // Learn and retry with fewer features.
       if (state.noThinkOk && s.effort !== 'default' && /think|reasoning|chat_template_kwargs|enable_thinking|effort/.test(msg)) {
