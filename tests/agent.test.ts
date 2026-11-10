@@ -132,6 +132,25 @@ describe('runAgent', () => {
     expect(last[last.length - 1].content).toContain('<page>');
   });
 
+  it('warns when the model alternates between the same two actions', async () => {
+    const replies = ['{"tool":"click","ref":"1"}', '{"tool":"scroll","dir":"down"}'];
+    const seen: ChatMsg[][] = [];
+    await runAgent({
+      task: 'find the text',
+      settings: { ...DEFAULTS, model: 'm', maxSteps: 7 },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async (_s, msgs) => {
+        seen.push(msgs);
+        return { text: replies[(seen.length - 1) % 2], usage: { totalMs: 1 }, mode: 'schema' };
+      },
+    });
+    const warned = seen.map(m => m[m.length - 1].content.includes('repeated the same action'));
+    expect(warned.slice(0, 5)).toEqual([false, false, false, false, false]);
+    expect(warned[6]).toBe(true);
+  });
+
   it('extend mode: every request is a strict extension of the previous one', async () => {
     const host = fakeHost();
     const replies = [
