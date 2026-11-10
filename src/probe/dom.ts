@@ -158,6 +158,14 @@ export function nameOf(el: Element, max = 80): string {
       n = clean(Array.from(labels).map(l => textOf(l)).join(' '), max);
       if (n) return n;
     }
+    // A custom-styled toggle (TodoMVC): an unlinked checkbox whose label is the element right after it.
+    if (t === 'checkbox' || t === 'radio') {
+      const next = input.nextElementSibling;
+      if (next?.tagName === 'LABEL' && !(next as HTMLLabelElement).htmlFor) {
+        n = clean(textOf(next), max);
+        if (n) return n;
+      }
+    }
     n = clean(input.getAttribute('placeholder') || input.title || input.getAttribute('name'), max);
     return n;
   }
@@ -251,12 +259,27 @@ export function flatChildren(node: Element | ShadowRoot | Document): Node[] {
   return Array.from(node.childNodes);
 }
 
-/** Whether the element participates in rendering at all (not display:none etc.). Prunes subtrees. */
-export function isRenderedStyle(style: CSSStyleDeclaration): boolean {
+/** Whether the element participates in rendering at all (not display:none etc.). Prunes subtrees. Pass the element to
+ *  keep a see-through checkbox or radio whose visible label stands in for it (custom-styled toggles draw the tick on
+ *  the label): it is still the control a person clicks, and it carries no text of its own. */
+export function isRenderedStyle(style: CSSStyleDeclaration, el?: Element): boolean {
   if (style.display === 'none') return false;
   if (style.contentVisibility === 'hidden') return false;
-  if (style.opacity !== '' && Number(style.opacity) < 0.1) return false;
+  if (style.opacity !== '' && Number(style.opacity) < 0.1) return !!el && styledToggle(el);
   return true;
+}
+
+function styledToggle(el: Element): boolean {
+  if (el.tagName !== 'INPUT') return false;
+  const i = el as HTMLInputElement;
+  if (i.type !== 'checkbox' && i.type !== 'radio') return false;
+  const next = i.nextElementSibling;
+  const labels = [...(i.labels ?? []), ...(next?.tagName === 'LABEL' ? [next] : [])];
+  const win = el.ownerDocument.defaultView;
+  return labels.some(l => {
+    const st = win?.getComputedStyle(l);
+    return !!st && st.display !== 'none' && st.visibility !== 'hidden' && !(st.opacity !== '' && Number(st.opacity) < 0.1) && !!clean(textOf(l), 80);
+  });
 }
 
 /**

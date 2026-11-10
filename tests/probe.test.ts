@@ -463,3 +463,15 @@ describe('offsite links', () => {
     expect(same.ok).toBe(true);
   });
 });
+
+describe('custom-styled toggles', () => {
+  it('lists a see-through checkbox whose sibling label is visible, named by that label', async () => {
+    const p = page(`<ul><li><input type="checkbox" style="opacity:0"><label>Water the plants</label></li>
+      <li><input type="checkbox" style="opacity:0"></li></ul>`);
+    const s = await snap(p);
+    expect(s.text).toMatch(/\[\d+\] checkbox "Water the plants" unchecked/);
+    expect(s.text.match(/checkbox/g)?.length).toBe(1);
+    const r = (await p.run({ op: 'click', id: refOf(s.text, 'checkbox "Water the plants"') })) as ProbeResult;
+    expect(r.ok && r.msg).toMatch(/now checked/);
+  });
+});

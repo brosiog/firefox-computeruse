@@ -121,7 +121,7 @@ export function walk(root: Element, opts: WalkOptions): WalkResult {
     const tag = el.tagName;
     if (SKIP_TAGS.has(tag)) return;
     const style = win.getComputedStyle(el);
-    if (!style || !isRenderedStyle(style)) return;
+    if (!style || !isRenderedStyle(style, el)) return;
     const rect = el.getBoundingClientRect();
     if (visuallyHidden(el, style, rect, win)) return;
 
