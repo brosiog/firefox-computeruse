@@ -203,3 +203,22 @@ describe('other players (TikTok, X, Vimeo, news sites)', () => {
     expect(toggleCaptions(at('https://x.com/', '<p>no player</p>'), true).ok).toBe(false);
   });
 });
+
+describe('YouTube transcript panel, newer markup', () => {
+  it('reads lines by content: timestamp, spoken time, words', async () => {
+    const { panelLine } = await import('../src/probe/transcript');
+    expect(panelLine("0:07 7 seconds I'm Hipyo Tech and I try things")).toEqual({ start: 7, text: "I'm Hipyo Tech and I try things" });
+    expect(panelLine('4:50 4 minutes, 50 seconds possibilities oh yeah')).toEqual({ start: 290, text: 'possibilities oh yeah' });
+    expect(panelLine('1:02:03 1 hour, 2 minutes, 3 seconds the end')).toEqual({ start: 3723, text: 'the end' });
+    expect(panelLine('Chapter 1: Intro')).toBeNull();
+  });
+
+  it('finds segments in the view-model panel without the old class names', async () => {
+    const doc = at('https://www.youtube.com/watch?v=n3wUI1', `<div id="panel">
+      <transcript-segment-view-model><div class="ytwTranscriptSegmentViewModelTimestamp">0:07</div><span class="ytAttributedStringHost">I'm Hipyo Tech.</span></transcript-segment-view-model>
+      <transcript-segment-view-model><div class="ytwTranscriptSegmentViewModelTimestamp">0:12</div><span class="ytAttributedStringHost">Let's go.</span></transcript-segment-view-model></div>`);
+    const r = await transcript(doc, 0, 4000, undefined, fetchOf({}), 0);
+    expect(r.ok && r.msg).toMatch(/YouTube transcript panel/);
+    expect(r.ok && r.msg).toContain("[0:07] I'm Hipyo Tech.");
+  });
+});
