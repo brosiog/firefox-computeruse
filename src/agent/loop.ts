@@ -117,6 +117,8 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let prevRefs = new Set<string>();
   let lastKey = '';
   let repeats = 0;
+  // The last few action keys: two actions taken in turn (click, scroll, click, scroll) are a loop too.
+  const recent: string[] = [];
   let failures = 0;
   let llmRetries = 0;
   // Halved each time the server says the prompt does not fit, so compaction gets stricter until it does.
@@ -281,7 +283,10 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     if (failures >= 6) return finish(false, `Stopped after repeated failures. Last error: ${result.text}`, n);
 
     const key = canonical({ ...a, think: undefined }) + '@' + obs.url;
-    repeats = key === lastKey ? repeats + 1 : 0;
+    recent.push(key);
+    if (recent.length > 4) recent.shift();
+    const alternating = recent.length === 4 && recent[3] === recent[1] && recent[2] === recent[0] && recent[3] !== recent[2];
+    repeats = key === lastKey || alternating ? repeats + 1 : 0;
     lastKey = key;
 
     // History keeps the model's own JSON when it was clean (maximizes cache reuse on servers that keep generated
