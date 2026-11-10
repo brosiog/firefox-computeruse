@@ -13,6 +13,8 @@ export type ProbeCmd =
   | { op: 'hover'; id: number }
   | { op: 'read'; offset: number; budget: number; query?: string; plain?: boolean }
   | { op: 'find'; text: string; limit: number }
+  /** The main video's captions as timestamped text (read-only; from the page's own site or its declared track). */
+  | { op: 'transcript'; offset: number; budget: number; query?: string }
   | { op: 'settle'; quietMs: number; maxMs: number }
   | { op: 'marks'; show: boolean }
   /** Finds the sign-in fields (in the form around `id`, or the frame). Reports which exist, never their values. */

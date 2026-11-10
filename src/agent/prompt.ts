@@ -21,6 +21,7 @@ const NOTES: Partial<Record<string, string>> = {
   type: 'replaces the field\'s text; enter submits',
   read: 'page text; query filters lines',
   find: 'search the whole page, returns refs',
+  transcript: 'captions of the video on the page, timestamped; query filters',
   screenshot: 'look at the page, refs drawn on it',
   web_search: 'quick facts without leaving the page; open a result with navigate',
   login: 'on sign-in pages: fills the saved login (hidden from you); enter submits',

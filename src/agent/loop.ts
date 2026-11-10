@@ -465,11 +465,11 @@ export function createExecutor(o: ExecContext): Executor {
       }
       if (!r.ok) return { ok: false, text: fence(r.error) };
       for (const l of r.links ?? []) knownUrls.add(l);
-      if (cmd.op === 'read' || cmd.op === 'find') noteFlagged(r.msg);
+      if (cmd.op === 'read' || cmd.op === 'find' || cmd.op === 'transcript') noteFlagged(r.msg);
       // read/find return website text: it goes inside the page boundary like the page state does.
-      let text = cmd.op === 'read' || cmd.op === 'find' ? `<page>\n${fence(r.msg)}\n</page>` : fence(r.msg);
+      let text = cmd.op === 'read' || cmd.op === 'find' || cmd.op === 'transcript' ? `<page>\n${fence(r.msg)}\n</page>` : fence(r.msg);
       if (r.openUrl) text += '; ' + (await host.newTab(r.openUrl));
-      else if (cmd.op !== 'read' && cmd.op !== 'find') {
+      else if (cmd.op !== 'read' && cmd.op !== 'find' && cmd.op !== 'transcript') {
         const moved = await host.settle(urlBefore);
         if (moved) text += ` ${moved}.`;
       }
@@ -490,6 +490,8 @@ export function createExecutor(o: ExecContext): Executor {
         return probe({ op: 'hover' }, a.ref);
       case 'read':
         return probe({ op: 'read', offset: a.offset ?? 0, budget: Math.min(6000, Math.max(2000, s.pageBudget)), query: a.query });
+      case 'transcript':
+        return probe({ op: 'transcript', offset: a.offset ?? 0, budget: Math.min(6000, Math.max(2000, s.pageBudget)), query: a.query });
       case 'find':
         return probe({ op: 'find', text: a.text ?? a.query ?? '', limit: 15 });
       case 'navigate': {

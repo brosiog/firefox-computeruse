@@ -118,7 +118,11 @@ export function readLines(root: Element, prefix: string, refs: Refs, taint?: (el
 }
 
 export function readPage(root: Element, prefix: string, refs: Refs, offset: number, budget: number, query?: string, taint?: (el: Element) => void, plain = false): string {
-  const lines = readLines(root, prefix, refs, taint, plain);
+  return pageLines(readLines(root, prefix, refs, taint, plain), offset, budget, query, 'this page', '(no readable text on this page)');
+}
+
+/** Lines filtered by query (with their neighbours) or paged by character offset: shared by read and transcript. */
+export function pageLines(lines: string[], offset: number, budget: number, query: string | undefined, what: string, empty: string): string {
   if (query && query.trim()) {
     const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1);
     const keep = new Set<number>();
@@ -132,7 +136,7 @@ export function readPage(root: Element, prefix: string, refs: Refs, offset: numb
         if (i + 1 < lines.length) keep.add(i + 1);
       }
     });
-    if (!keep.size) return `No text on this page matches "${query}". (${lines.length} lines of text in total.)`;
+    if (!keep.size) return `No text on ${what} matches "${query}". (${lines.length} lines of text in total.)`;
     let out = allHit ? '' : `No line contains all of "${query}". Lines with some of the words:\n`;
     let last = -2;
     for (const i of [...keep].sort((a, b) => a - b)) {
@@ -147,7 +151,7 @@ export function readPage(root: Element, prefix: string, refs: Refs, offset: numb
     return out.trim();
   }
   const all = lines.join('\n');
-  if (!all) return '(no readable text on this page)';
+  if (!all) return empty;
   const slice = all.slice(offset, offset + budget);
   const end = offset + slice.length;
   let note = '';
