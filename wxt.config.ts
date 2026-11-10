@@ -14,14 +14,16 @@ export default defineConfig({
   outDirTemplate: '',
   imports: false,
   manifest: {
-    name: 'Firefox Computer Use',
+    name: 'Firefox Browser Use',
     description: 'A fast web agent for local models. Runs in the sidebar, drives the current tab.',
-    permissions: ['tabs', 'scripting', 'storage', 'theme', 'webRequest', 'webRequestBlocking', 'webNavigation'],
+    permissions: ['tabs', 'scripting', 'storage', 'theme', 'webRequest', 'webRequestBlocking'],
     host_permissions: ['<all_urls>'],
     // Firefox's default MV3 CSP adds `upgrade-insecure-requests`, which silently rewrites http://<LAN model server> to
     // https:// and breaks every plain-HTTP local server off localhost (Splash/LM Studio/Ollama on another Mac).
     content_security_policy: { extension_pages: "script-src 'self'; object-src 'self';" },
-    icons: { 64: 'icon.svg' },
+    // AMO's add-on icon comes from the `icons` key, so it gets PNGs at the sizes AMO and Firefox use. The SVG stays
+    // the toolbar button and sidebar icon (action / sidebar_action below).
+    icons: { 48: 'icons/icon-48.png', 96: 'icons/icon-96.png', 128: 'icons/icon-128.png' },
     action: { default_title: 'Toggle agent sidebar', default_icon: 'icon.svg' },
     commands: {
       _execute_sidebar_action: {
@@ -33,7 +35,9 @@ export default defineConfig({
       gecko: {
         id: 'firefox-computeruse@local',
         strict_min_version: '128.0',
-        data_collection_permissions: { required: ['none'] },
+        // Page content goes to the model server the user configures (and to OpenAI with ChatGPT sign-in); the ChatGPT
+        // tokens and Bitwarden sign-in are authentication data. Values are from the add-on linter's category enum.
+        data_collection_permissions: { required: ['websiteContent', 'authenticationInfo'] },
       },
     },
   },

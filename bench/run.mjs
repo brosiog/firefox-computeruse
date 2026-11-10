@@ -3,7 +3,7 @@
 // step against the oracle and writes a report.
 //
 //   node bench/run.mjs --model oracle                         # self-test: every task solvable, harness overhead
-//   node bench/run.mjs --model http://192.168.86.202:8000/v1 --model-id qwen3.8-27b-splash --seeds 1
+//   node bench/run.mjs --model http://<model-server>:8000/v1 --model-id <model-id> --seeds 1
 //   node bench/run.mjs ... --families shop,form --perturb base,noise,popup --repeat 2
 //   node bench/run.mjs ... --config base --config 'b2500={"pageBudget":2500}' --config 'nothink={"reasoning":false}'
 //   node bench/run.mjs ... --split holdout          (report holdout only when you are done tuning)

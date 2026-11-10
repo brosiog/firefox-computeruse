@@ -47,7 +47,7 @@ const web = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/e2e/settings') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ vault: true, vaultUrl: `http://localhost:${BW_PORT}`, vaultAsk: true, vaultAgents: true, bridgeUrl: 'http://127.0.0.1:47829', model: 'qwen3.8-27b-splash' }));
+    return res.end(JSON.stringify({ vault: true, vaultUrl: `http://localhost:${BW_PORT}`, vaultAsk: true, vaultAgents: true, bridgeUrl: 'http://127.0.0.1:47829', model: 'local-model' }));
   }
   if (u.pathname === '/e2e/approve') {
     approvals.push(u.searchParams.get('what'));

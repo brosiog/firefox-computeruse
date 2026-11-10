@@ -1,11 +1,11 @@
 ---
 name: firefox-browser
-description: Drive the user's real Firefox (logged-in sessions, open tabs) through the Firefox Computer Use extension. Use to read or act on web pages, or to hand a browsing chore to the extension's local-model agent.
+description: Drive the user's real Firefox (logged-in sessions, open tabs) through the Firefox Browser Use extension. Use to read or act on web pages, or to hand a browsing chore to the extension's local-model agent.
 ---
 
 # Firefox browser
 
-Run `node <repo>/bridge/fcu.mjs <command>`. The Firefox Computer Use sidebar must be open in Firefox. Exit code 1 means
+Run `node <repo>/bridge/fcu.mjs <command>`. The Firefox Browser Use sidebar must be open in Firefox. Exit code 1 means
 an error; the reason is printed.
 
 - `fcu.mjs observe` prints the current tab as compact text: the URL, the tabs, and elements with refs such as

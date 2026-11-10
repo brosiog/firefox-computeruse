@@ -65,15 +65,6 @@ export const PRESETS: Record<string, Preset> = {
     history: 'extend',
     hint: 'Uses your ChatGPT subscription. Sign in below, then pick a model.',
   },
-  splash: {
-    label: 'Splash (LAN Mac)',
-    kind: 'openai',
-    baseUrl: 'http://192.168.86.202:8000/v1',
-    model: 'qwen3.8-27b-splash',
-    contextWindow: 65536,
-    history: 'extend',
-    hint: 'splash serve … (first request after idle-release reloads the model, ~30 s)',
-  },
   ollama: { label: 'Ollama', kind: 'ollama', baseUrl: 'http://localhost:11434', hint: 'ollama serve' },
   lmstudio: { label: 'LM Studio', kind: 'openai', baseUrl: 'http://localhost:1234/v1', hint: 'Developer → Start server' },
   llamacpp: { label: 'llama.cpp server', kind: 'openai', baseUrl: 'http://localhost:8080/v1', hint: 'llama-server -m model.gguf -c 16384 --jinja' },
@@ -83,8 +74,9 @@ export const PRESETS: Record<string, Preset> = {
 
 export const DEFAULTS: Settings = {
   kind: 'openai',
-  baseUrl: 'http://192.168.86.202:8000/v1',
-  model: 'qwen3.8-27b-splash',
+  // Neutral local default (LM Studio's port). No model is preselected: pick one from the server's list in Settings.
+  baseUrl: 'http://localhost:1234/v1',
+  model: '',
   apiKey: '',
   contextWindow: 65536,
   maxOutput: 400,

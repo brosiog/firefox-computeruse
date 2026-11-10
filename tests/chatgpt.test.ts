@@ -11,7 +11,7 @@ describe('Sign in with ChatGPT: authorization', () => {
   it('first sign-in registers dynamically with the app name', () => {
     const q = new URL(authorizeUrl(base)).searchParams;
     expect(q.get('client_id')).toBe('dynamic_agent_client');
-    expect(q.get('agent_name_hint')).toBe('Firefox Computer Use');
+    expect(q.get('agent_name_hint')).toBe('Firefox Browser Use');
     expect(q.get('scope')).toBe('openid profile email offline_access resource.invoke chatgpt.tokens.use.direct');
     expect(q.get('resource')).toBe('https://api.openai.com/v1');
     expect(q.get('code_challenge_method')).toBe('S256');
