@@ -50,6 +50,12 @@ export function parseVtt(src: string): Cue[] {
     if (text && Number.isFinite(start)) cues.push({ start, text });
     if (cues.length >= MAX_CUES) break;
   }
+  // Streaming (HLS) WebVTT carries an X-TIMESTAMP-MAP and often starts its clock at 1:00:00 (X does): count from the
+  // hour the captions start in instead.
+  if (/X-TIMESTAMP-MAP/i.test(src) && cues.length && cues[0].start >= 3600) {
+    const base = Math.floor(cues[0].start / 3600) * 3600;
+    for (const c of cues) c.start -= base;
+  }
   return dedupe(cues);
 }
 
