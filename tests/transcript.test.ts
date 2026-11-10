@@ -222,3 +222,12 @@ describe('YouTube transcript panel, newer markup', () => {
     expect(r.ok && r.msg).toContain("[0:07] I'm Hipyo Tech.");
   });
 });
+
+describe('streaming WebVTT', () => {
+  it('counts from the start of the video when HLS captions begin at 1:00:00', () => {
+    const vtt = 'WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000\n\n01:00:01.000 --> 01:00:03.000\nWelcome to Max Power.\n\n01:00:13.000 --> 01:00:15.000\nNASA lit the fires.\n';
+    expect(toLines(parseVtt(vtt))).toEqual(['[0:01] Welcome to Max Power.', '[0:13] NASA lit the fires.']);
+    // A plain file that really is an hour in keeps its times.
+    expect(parseVtt('WEBVTT\n\n01:00:01.000 --> 01:00:03.000\nLate.\n')[0].start).toBe(3601);
+  });
+});
