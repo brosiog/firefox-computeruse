@@ -439,3 +439,15 @@ describe('refs after a re-render', () => {
     expect(document.querySelectorAll('input:checked').length).toBe(0);
   });
 });
+
+describe('custom listbox', () => {
+  it('says what the opener shows after an option is picked', async () => {
+    const p = page(`<span><button type="button" aria-haspopup="listbox" aria-label="Plan" id="pb">Choose a plan</button>
+      <ul role="listbox" id="pl"><li role="option" aria-selected="false">Starter</li><li role="option" aria-selected="false">Scale</li></ul></span>`);
+    const pb = document.getElementById('pb')!;
+    document.querySelectorAll('[role=option]').forEach(li => ((li as HTMLElement).onclick = () => { pb.textContent = li.textContent; li.setAttribute('aria-selected', 'true'); }));
+    const s = await snap(p);
+    const r = (await p.run({ op: 'click', id: refOf(s.text, 'option "Scale"') })) as ProbeResult;
+    expect(r.ok && r.msg).toMatch(/clicked li "Scale", now selected; button "Plan" now shows "Scale"/);
+  });
+});

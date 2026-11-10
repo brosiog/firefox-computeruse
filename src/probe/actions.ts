@@ -313,7 +313,25 @@ function toggledState(el: Element): string {
   if (ae) return `, now ${ae === 'true' ? 'expanded' : 'collapsed'}`;
   const ac = el.getAttribute('aria-checked');
   if (ac) return `, now ${ac === 'true' ? 'checked' : 'unchecked'}`;
-  return '';
+  return optionPicked(el);
+}
+
+/** After picking an option of a custom listbox: whether it took, and what its opener shows now, so the model need
+ *  not reopen the list to check. */
+function optionPicked(el: Element): string {
+  const opt = el.closest('[role=option]');
+  const list = opt?.closest('[role=listbox]');
+  if (!opt || !list) return '';
+  const parts: string[] = [];
+  if (opt.isConnected && opt.getAttribute('aria-selected') === 'true') parts.push(', now selected');
+  const id = list.id;
+  const doc = list.ownerDocument;
+  const opener =
+    (id && doc.querySelector(`[aria-controls="${CSS.escape(id)}"], [aria-owns="${CSS.escape(id)}"]`)) ||
+    list.parentElement?.querySelector('[aria-haspopup=listbox], [role=combobox]');
+  const shows = opener && opener !== list ? (opener.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+  if (opener && shows) parts.push(`; ${describe(opener)} now shows "${shows}"`);
+  return parts.join('');
 }
 
 /** `perKeyMax`: text up to this length is typed key by key (default 80); longer text is pasted. */
