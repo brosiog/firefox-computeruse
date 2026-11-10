@@ -183,7 +183,7 @@ const SHARED = /\.(github\.io|gitlab\.io|pages\.dev|netlify\.app|vercel\.app|her
 
 export function siteOf(host: string): string {
   const h = host.toLowerCase().replace(/\.$/, '');
-  if (SHARED.test(h)) return h;
+  if (SHARED.test(h) || /^\d+(\.\d+){3}$/.test(h) || h.includes(':')) return h; // hosted subdomains, IP addresses
   const parts = h.split('.');
   if (parts.length <= 2) return h;
   const tld = parts[parts.length - 1];

@@ -7,6 +7,7 @@ import type { Gate, ProbeResult, Risk, ScrollDir } from '../protocol';
 import { clean, deepActive, isDisabled, isEditable, isSecretField, isTextField, nameOf, roleOf } from './dom';
 import { describe } from './snapshot';
 import { DISMISS } from './inject';
+import { siteOf } from '../vault';
 
 type Win = Window & typeof globalThis;
 
@@ -40,6 +41,22 @@ let topOrigin: string | null = null;
 /** Set by the probe from the host: the origin of the tab's top page (frames cannot read it themselves). */
 export function setTopOrigin(o: string | null) {
   topOrigin = o;
+}
+
+/** A link that leaves the site the user is on. Pages steer agents with links ("Required step: open this link") worded
+ *  like any site notice, which no text rule separates from a real one; following one is the user's call, except in full
+ *  auto and where the executor knows the user asked for that site. */
+function offsiteLink(el: Element): Gate | null {
+  const a = el.closest('a[href]') as HTMLAnchorElement | null;
+  if (!a || !/^https?:/.test(a.href)) return null;
+  try {
+    const to = new URL(a.href);
+    const from = new URL(topOrigin ?? el.ownerDocument.location.origin);
+    if (siteOf(to.hostname) === siteOf(from.hostname)) return null;
+    return { risk: 'offsite', what: `open ${describe(a)}, a link to another site (${to.host})`, host: to.hostname };
+  } catch {
+    return null;
+  }
 }
 
 function crossSiteForm(form: HTMLFormElement | null): string | null {
@@ -292,6 +309,8 @@ export function click(el: Element, ctx: ActCtx): ProbeResult {
   if (sus && !ctx.approved && ctx.gated('suspicious')) return withheld(sus);
   const held = hold(classifyClick(el), ctx, 'click');
   if (held) return held;
+  const off = offsiteLink(el);
+  if (off && !ctx.approved && ctx.gated('offsite')) return withheld(off);
 
   // Links that open a new tab would hit the popup blocker; the host opens them as a tab instead.
   const a = el.closest('a[href]') as HTMLAnchorElement | null;

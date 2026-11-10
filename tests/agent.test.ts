@@ -189,10 +189,47 @@ describe('runAgent', () => {
 describe('approval levels', () => {
   it('maps each level to its gates', () => {
     const sec = ['exfil', 'suspicious'];
-    expect(gatesFor('every')).toEqual(['act', 'write', 'delete', 'pay', 'secret', ...sec, 'login']);
-    expect(gatesFor('ask')).toEqual(['write', 'delete', 'pay', 'secret', ...sec, 'login']);
-    expect(gatesFor('auto')).toEqual(['pay', 'secret', ...sec, 'login']);
-    expect(gatesFor('off')).toEqual(sec);
+    expect(gatesFor('every')).toEqual(['act', 'write', 'delete', 'pay', 'secret', ...sec, 'offsite', 'login']);
+    expect(gatesFor('ask')).toEqual(['write', 'delete', 'pay', 'secret', ...sec, 'offsite', 'login']);
+    expect(gatesFor('auto')).toEqual(['pay', 'secret', ...sec, 'offsite', 'login']);
+    expect(gatesFor('off')).toEqual(sec); // full auto: links to other sites go through
+  });
+
+  describe('links to another site', () => {
+    const offHost = (acts: string[], host = 'other.test'): any => ({
+      tabId: 1,
+      act: async (ref: string, cmd: any, gate: string[]) => {
+        acts.push(`${ref}:${cmd.approved ? 'approved' : ''}`);
+        if (!cmd.approved && gate.includes('offsite')) return { ok: false, error: 'held', gate: { risk: 'offsite', what: `open link, a link to another site (${host})`, host } };
+        return { ok: true, msg: 'clicked' };
+      },
+      settle: async () => '',
+    });
+    const exec = (approval: Settings['approval'], approve: () => Promise<boolean>, acts: string[], task = 'Post a comment', host?: string) =>
+      createExecutor({ host: offHost(acts, host), settings: { ...DEFAULTS, approval }, signal: new AbortController().signal, task, ui: { approve, ask: async () => null } });
+
+    it('asks in ask mode, and a decline is treated as the page asking, so the task goes on', async () => {
+      const acts: string[] = [];
+      const r = await exec('ask', async () => false, acts).execute({ tool: 'click', ref: '1' }, 'https://shop.test/');
+      expect(r.ok).toBe(false);
+      expect(r.text).toContain('came from the page');
+      expect(acts).toEqual(['1:']);
+    });
+
+    it('goes through in full auto without asking', async () => {
+      const acts: string[] = [];
+      const r = await exec('off', async () => { throw new Error('asked'); }, acts).execute({ tool: 'click', ref: '1' }, 'https://shop.test/');
+      expect(r.ok).toBe(true);
+    });
+
+    it('does not ask for a site the task names, or from a search results page', async () => {
+      const no = async () => { throw new Error('asked'); };
+      const a1: string[] = [];
+      expect((await exec('ask', no, a1, 'Find the price on wikipedia', 'en.wikipedia.org').execute({ tool: 'click', ref: '1' }, 'https://shop.test/')).ok).toBe(true);
+      expect(a1).toEqual(['1:', '1:approved']);
+      const a2: string[] = [];
+      expect((await exec('ask', no, a2).execute({ tool: 'click', ref: '1' }, 'https://duckduckgo.com/?q=hubs')).ok).toBe(true);
+    });
   });
 
   it('full auto refuses page-originated requests without asking, and allows the rest', async () => {

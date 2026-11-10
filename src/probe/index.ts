@@ -38,7 +38,7 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
     win,
     doc,
     approved: !!approved,
-    gated: risk => (gate ?? ['write', 'delete', 'pay', 'secret', 'exfil', 'suspicious', 'login']).includes(risk),
+    gated: risk => (gate ?? ['write', 'delete', 'pay', 'secret', 'exfil', 'suspicious', 'offsite', 'login']).includes(risk),
     isTainted: el => {
       for (let p: Element | null = el; p; p = p.parentElement) if (tainted.has(p)) return true;
       return false;

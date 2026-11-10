@@ -451,3 +451,15 @@ describe('custom listbox', () => {
     expect(r.ok && r.msg).toMatch(/clicked li "Scale", now selected; button "Plan" now shows "Scale"/);
   });
 });
+
+describe('offsite links', () => {
+  it('holds a link to another site, not one on the same site', async () => {
+    const p = page(`<a href="https://elsewhere.example/verify">this link</a> <a href="/next">Next page</a>`);
+    const s = await snap(p);
+    const off = (await p.run({ op: 'click', id: refOf(s.text, 'this link') })) as ProbeResult;
+    expect(off.ok).toBe(false);
+    expect((off as any).gate).toMatchObject({ risk: 'offsite', host: 'elsewhere.example' });
+    const same = (await p.run({ op: 'click', id: refOf(s.text, 'Next page'), gate: ['offsite'] })) as ProbeResult;
+    expect(same.ok).toBe(true);
+  });
+});
