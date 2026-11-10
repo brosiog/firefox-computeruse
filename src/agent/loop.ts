@@ -152,9 +152,9 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     const fresh = obs.refs.filter(r => !prevRefs.has(r));
     if (n > 1 && fresh.length && fresh.length < obs.refs.length) notes.push(`(${fresh.length} elements are new since your last action.)`);
     prevRefs = new Set(obs.refs);
-    if (repeats >= 6) notes.push('You are stuck repeating the same actions. Use done now with what you have found so far.');
+    if (repeats >= 6) notes.push('You are stuck repeating the same actions. Use done now with what you found; if you did not find what was asked, say so with success false. Do not answer from memory.');
     else if (repeats >= 2) notes.push('Warning: you have repeated the same action without progress. Do something different, or use done.');
-    if (n === s.maxSteps) notes.push('This is your last step: use done now with what you have.');
+    if (n === s.maxSteps) notes.push('This is your last step: use done now with what you found; if you did not find what was asked, say so with success false. Do not answer from memory.');
     const tail = `${obs.text}\n${notes.join('\n')}${notes.length ? '\n' : ''}Step ${n}/${s.maxSteps}.`;
 
     // Context budget: leave room for the model's output (and its thinking, if on).
