@@ -151,6 +151,20 @@ describe('runAgent', () => {
     expect(seen.some((_, i) => last(i).includes('You are stuck'))).toBe(true);
   });
 
+  it('stops a loop that goes on after being told to finish', async () => {
+    let n = 0;
+    const r = await runAgent({
+      task: 'close the popup',
+      settings: { ...DEFAULTS, model: 'm', maxSteps: 40 },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async () => ({ text: '{"think":"look for the close button","tool":"find","text":"close"}', usage: { totalMs: 1 }, mode: 'schema' }),
+    }).finally(() => n++);
+    expect(r.success).toBe(false);
+    expect(r.answer).toMatch(/^Stopped: the agent kept repeating .* Its last note: look for the close button/);
+  });
+
   it('asks again for an answer cut off at a double quote', async () => {
     const replies = ['{"tool":"done","answer":"Video: "}', '{"tool":"done","answer":"Video: \'Top 10\' compares 4 earbuds."}'];
     let n = 0;

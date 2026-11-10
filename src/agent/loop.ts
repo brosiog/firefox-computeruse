@@ -128,6 +128,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   let wantShot = false;
   let bounced = false;
   let cutOff = false;
+  let lastThink = '';
 
   const finish = (success: boolean, answer: string, n: number) => {
     ui.event({ type: 'done', success, answer, steps: n, ms: Date.now() - t0 });
@@ -152,6 +153,8 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     const fresh = obs.refs.filter(r => !prevRefs.has(r));
     if (n > 1 && fresh.length && fresh.length < obs.refs.length) notes.push(`(${fresh.length} elements are new since your last action.)`);
     prevRefs = new Set(obs.refs);
+    // Told to finish and still looping: stop here instead of spending the rest of the step budget.
+    if (repeats >= 10) return finish(false, `Stopped: the agent kept repeating the same actions without progress.${lastThink ? ` Its last note: ${lastThink}` : ''}`, n - 1);
     if (repeats >= 6) notes.push('You are stuck repeating the same actions. Use done now with what you found; if you did not find what was asked, say so with success false. Do not answer from memory.');
     else if (repeats >= 2) notes.push('Warning: you have repeated the same action without progress. Do something different, or use done.');
     if (n === s.maxSteps) notes.push('This is your last step: use done now with what you found; if you did not find what was asked, say so with success false. Do not answer from memory.');
@@ -255,6 +258,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     }
     parseFails = 0;
     const a = parsed.action;
+    if (a.think) lastThink = a.think.slice(0, 200);
     ui.event({ type: 'action', action: a, usage: res.usage, mode: res.mode, promptTokensEst: estimateTokens(msgs) });
 
     if (a.tool === 'done' && !cutOff && /:\s*$/.test(a.answer ?? '')) {
