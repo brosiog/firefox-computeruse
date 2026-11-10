@@ -10,7 +10,6 @@ import { attachedBlock, buildMessages, compact, estimateTokens, systemPrompt, ta
 import { actionSchema, canonical, extractJson, parseAction, type Action } from './tools';
 import { login } from './login';
 import type { Vault } from '../vault';
-import { captionFileTranscript } from '../probe/transcript';
 
 export type AgentEvent =
   | { type: 'step'; n: number }
@@ -479,11 +478,9 @@ export function createExecutor(o: ExecContext): Executor {
           const src = u ?? (await fromPlayer());
           if (!src) continue;
           const body = await host.fetchCaption(src);
-          const msg = body && captionFileTranscript(body, u ? 'the site\'s caption file' : 'the player\'s captions', cmd.offset, cmd.budget, cmd.query);
-          if (msg) {
-            noteFlagged(msg);
-            return { ok: true, text: `<page>\n${fence(msg)}\n</page>` };
-          }
+          // Parsed in the page's probe, which already carries the caption parsers (not shipped twice).
+          const got = body ? await probe({ ...cmd, file: { body, source: u ? 'the site\'s caption file' : 'the player\'s captions' } }) : null;
+          if (got?.ok) return got;
         }
         return transcriptMiss(r, urlBefore);
       }

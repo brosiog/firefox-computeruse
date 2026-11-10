@@ -4,6 +4,7 @@ import { buildMessages, compact, systemPrompt } from '../src/agent/prompt';
 import { parseAction } from '../src/agent/tools';
 import type { Host, Observation } from '../src/browser/host';
 import { stripThinking, type ChatMsg } from '../src/llm/client';
+import { captionFileTranscript } from '../src/probe/transcript';
 import { DEFAULTS } from '../src/settings';
 
 describe('parseAction', () => {
@@ -508,7 +509,8 @@ describe('transcript tool on other players', () => {
     tabId: 1,
     settle: async () => '',
     act: async (_r: string, cmd: any) =>
-      cmd.op === 'transcript' ? { ok: false, error: 'this video has no captions the page provides' } : cmd.op === 'captionSources' ? { ok: true, msg: JSON.stringify(o.listed ?? []) } : { ok: true, msg: '' },
+      cmd.op === 'transcript' && cmd.file ? (() => { const msg = captionFileTranscript(cmd.file.body, cmd.file.source, cmd.offset, cmd.budget); return msg ? { ok: true, msg } : { ok: false, error: 'unreadable' }; })()
+      : cmd.op === 'transcript' ? { ok: false, error: 'this video has no captions the page provides' } : cmd.op === 'captionSources' ? { ok: true, msg: JSON.stringify(o.listed ?? []) } : { ok: true, msg: '' },
     ...o,
   });
   const exec = (host: any) => createExecutor({ host, settings: { ...DEFAULTS }, signal: new AbortController().signal, task: 'summarize', ui: { approve: async () => true, ask: async () => null } });

@@ -6,7 +6,7 @@ import * as act from './actions';
 import { Refs } from './refs';
 import { fillLogin, loginForm } from './login';
 import { readPage, pickContentRoot } from './read';
-import { captionSources, toggleCaptions, transcript } from './transcript';
+import { captionFileTranscript, captionSources, toggleCaptions, transcript } from './transcript';
 import { find, findModal, render, scrollFacts, describe } from './snapshot';
 
 export interface Probe {
@@ -120,6 +120,10 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
             return { ok: true, msg: text, links: refs.hrefs() };
           }
           case 'transcript': {
+            if (cmd.file) {
+              const msg = captionFileTranscript(cmd.file.body, cmd.file.source, cmd.offset, cmd.budget, cmd.query);
+              return msg ? { ok: true, msg } : { ok: false, error: 'the caption file could not be read' };
+            }
             const r = await transcript(doc, cmd.offset, cmd.budget, cmd.query, fetch, 12000, cmd.url);
             return r.ok ? { ok: true, msg: r.msg } : r;
           }

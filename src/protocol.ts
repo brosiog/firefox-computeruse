@@ -14,7 +14,7 @@ export type ProbeCmd =
   | { op: 'read'; offset: number; budget: number; query?: string; plain?: boolean }
   | { op: 'find'; text: string; limit: number }
   /** The main video's captions as timestamped text (read-only; from the page's own site or its declared track). */
-  | { op: 'transcript'; offset: number; budget: number; query?: string; url?: string }
+  | { op: 'transcript'; offset: number; budget: number; query?: string; url?: string; file?: { body: string; source: string } }
   /** Switches the video player's captions (its CC button) on or off, so the player itself fetches them; says what
    *  they were. */
   | { op: 'captions'; on: boolean }
