@@ -409,3 +409,33 @@ describe('sign-in fields (password manager fills)', () => {
     expect(((await p.run({ op: 'loginForm' })) as any).error).toContain('sign-up or change-password');
   });
 });
+
+describe('refs after a re-render', () => {
+  const list = (items: string[]) => items.map(t => `<li><label><input type="checkbox"> ${t}</label> <button aria-label="Delete ${t}">x</button></li>`).join('');
+
+  it('follows a redrawn control to its replacement, so a chain survives a list that re-renders', async () => {
+    const p = page(`<ul id="l">${list(['Alpha task', 'Beta task'])}</ul>`);
+    const s = await snap(p);
+    const beta = refOf(s.text, 'checkbox "Beta task"');
+    document.getElementById('l')!.innerHTML = list(['Beta task', 'Alpha task']); // re-render, new elements
+    const r = (await p.run({ op: 'click', id: beta })) as ProbeResult;
+    expect(r.ok).toBe(true);
+    const box = [...document.querySelectorAll('input')].find(i => i.parentElement!.textContent!.includes('Beta'))!;
+    expect((box as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('still fails closed when the control is gone or ambiguous', async () => {
+    const p = page(`<ul id="l">${list(['Alpha task', 'Beta task'])}</ul>`);
+    const s = await snap(p);
+    const beta = refOf(s.text, 'checkbox "Beta task"');
+    document.getElementById('l')!.innerHTML = list(['Alpha task']);
+    expect(((await p.run({ op: 'click', id: beta })) as ProbeResult).ok).toBe(false);
+
+    const p2 = page(`<ul id="l">${list(['Gamma task'])}</ul>`);
+    const g = refOf((await snap(p2)).text, 'checkbox "Gamma task"');
+    document.getElementById('l')!.innerHTML = list(['Gamma task', 'Gamma task']);
+    const r = (await p2.run({ op: 'click', id: g })) as ProbeResult;
+    expect(r.ok).toBe(false);
+    expect(document.querySelectorAll('input:checked').length).toBe(0);
+  });
+});

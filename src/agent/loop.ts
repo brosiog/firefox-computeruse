@@ -186,11 +186,23 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     let gotText = false;
     const slow = setTimeout(() => !gotText && ui.event({ type: 'slow', seconds: 8 }), 8000);
     try {
-      res = await chat(s, msgs, schema, signal, partial => {
-        gotText = true;
-        const t = partialThink(partial);
-        if (t) ui.event({ type: 'thinking', text: t });
-      });
+      res = await chat(
+        s,
+        msgs,
+        schema,
+        signal,
+        partial => {
+          gotText = true;
+          const t = partialThink(partial);
+          if (t) ui.event({ type: 'thinking', text: t });
+        },
+        {
+          onThinking: tokens => {
+            gotText = true;
+            ui.event({ type: 'thinking', text: `thinking… (~${tokens} tokens)` });
+          },
+        },
+      );
     } catch (e) {
       clearTimeout(slow);
       if (signal.aborted) return finish(false, 'Stopped.', n - 1);
@@ -203,11 +215,11 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
         n--;
         continue;
       }
-      if (e instanceof LlmError && e.kind === 'length') {
+      if (e instanceof LlmError && (e.kind === 'length' || e.kind === 'loop')) {
         // Thinking used the whole output budget, even raised as far as the window allows: tell the model, bounded.
         ui.event({ type: 'parse-error', raw: '', error: msg });
         if (++parseFails >= 3) return finish(false, `The model kept running out of output budget before answering: ${msg}`, n);
-        steps.push({ page: tail, action: '(no answer: output budget used up while thinking)', result: 'Error: you ran out of output tokens while thinking. Think briefly and answer with one action.' });
+        steps.push({ page: tail, action: e.kind === 'loop' ? '(no answer: thinking went in circles)' : '(no answer: output budget used up while thinking)', result: 'Error: your thinking ran too long without an answer. Think briefly and answer with one action.' });
         continue;
       }
       // One retry for transient failures (server restarting, model reloading after idle release).

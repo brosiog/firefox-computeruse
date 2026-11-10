@@ -42,8 +42,9 @@ export class LlmError extends Error {
     message: string,
     readonly status = 0,
     /** context: the prompt (plus the output reserve) does not fit the window; length: the output budget ran out
-     *  (usually while thinking) before the answer was complete. Both are recoverable by the caller. */
-    readonly kind?: 'context' | 'length',
+     *  (usually while thinking) before the answer was complete; loop: the model's thinking went in circles and was cut
+     *  short. All are recoverable by the caller. */
+    readonly kind?: 'context' | 'length' | 'loop',
   ) {
     super(message);
   }
@@ -139,6 +140,17 @@ async function* lines(body: ReadableStream<Uint8Array>, signal: AbortSignal): As
 
 /** Grammar-constrained decoding can collapse into endless whitespace inside the JSON: throws so the caller stops early
  *  and falls back. */
+/** Thinking that repeats itself: the short-period patterns above, or the last 160 characters already seen twice
+ *  before (a paragraph-long loop). At ~19 tok/s a 32K budget is half an hour, so a loop is stopped, not waited out. */
+export function thinkingLoops(r: string): boolean {
+  if (/\s{200}$/.test(r) || /(.{1,8})\1{60}$/s.test(r)) return true;
+  if (r.length < 2000) return false;
+  const tail = r.slice(-160);
+  let n = 0;
+  for (let i = r.indexOf(tail); i >= 0 && i < r.length - 160; i = r.indexOf(tail, i + 1)) if (++n >= 2) return true;
+  return false;
+}
+
 function checkDegenerate(text: string): void {
   if (/\s{48}$/.test(text) || /(.{1,8})\1{30}$/s.test(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
 }
@@ -149,6 +161,9 @@ export async function chat(
   schema: object | null,
   signal: AbortSignal,
   onText?: (full: string) => void,
+  /** cutoffOk: a reply cut off by the output limit is expected (prewarm asks for one token) and is returned as is.
+   *  onThinking: progress of the model's separate thinking stream, in approximate tokens. */
+  opts: { cutoffOk?: boolean; onThinking?: (tokens: number) => void } = {},
 ): Promise<ChatResult> {
   const key = `${s.kind}|${trimSlash(s.baseUrl)}|${s.model}`;
   const prior = learned.get(key);
@@ -165,17 +180,28 @@ export async function chat(
   if (!schema) state.level = 'off';
   let outMult = 1;
   let ctxTries = 0;
+  let reasoning = '';
+  let checked = 0;
+  const onThink = (d: string) => {
+    reasoning += d;
+    if (reasoning.length - checked < 400) return;
+    checked = reasoning.length;
+    opts.onThinking?.(Math.round(reasoning.length / 3.3));
+    if (thinkingLoops(reasoning)) throw new LlmError(`the model's thinking went in circles (${Math.round(reasoning.length / 3.3)} tokens); cut short`, 0, 'loop');
+  };
   for (let attempt = 0; attempt < 8; attempt++) {
+    reasoning = '';
+    checked = 0;
     // Output never exceeds what the window leaves after the prompt (the server's window, if it told us a smaller one).
     const ctx = Math.min(s.contextWindow, state.ctx ?? Infinity);
     state.maxOut = fitOutput(Math.floor(outputBudget(s) * outMult), ctx, msgs, state.promptFloor);
     try {
       const r =
         s.kind === 'ollama'
-          ? await ollama(s, msgs, schema, state, signal, onText)
+          ? await ollama(s, msgs, schema, state, signal, onText, onThink)
           : s.kind === 'chatgpt'
             ? await responses(s, msgs, schema, state, signal, onText)
-            : await openai(s, msgs, schema, state, signal, onText);
+            : await openai(s, msgs, schema, state, signal, onText, onThink);
       if (schema) learned.set(key, state);
       return r;
     } catch (e) {
@@ -184,6 +210,7 @@ export async function chat(
       const msg = (err.message || '').toLowerCase();
       // Output budget used up (usually thinking): ask again with double, as far as the window allows; then the caller
       // decides. No feature downgrade fixes this.
+      if (err.kind === 'length' && opts.cutoffOk) return { text: '', usage: { totalMs: 0 }, mode: state.level };
       if (err.kind === 'length') {
         const more = fitOutput(state.maxOut * 2, ctx, msgs, state.promptFloor);
         if (more > state.maxOut) {
@@ -264,6 +291,7 @@ async function ollama(
   st: { level: Level; noThinkOk: boolean; maxOut: number },
   signal: AbortSignal,
   onText?: (t: string) => void,
+  onThink?: (d: string) => void,
 ): Promise<ChatResult> {
   const t0 = performance.now();
   const body: Record<string, unknown> = {
@@ -288,6 +316,7 @@ async function ollama(
       continue;
     }
     if (j.error) throw new LlmError(`model error: ${j.error}`, 500);
+    if (j.message?.thinking) onThink?.(j.message.thinking);
     const c = j.message?.content;
     if (c) {
       text += c;
@@ -315,6 +344,7 @@ async function openai(
   st: { level: Level; noThinkOk: boolean; extrasOk: boolean; maxOut: number },
   signal: AbortSignal,
   onText?: (t: string) => void,
+  onThink?: (d: string) => void,
 ): Promise<ChatResult> {
   const t0 = performance.now();
   const local = isLocalUrl(s.baseUrl);
@@ -364,7 +394,14 @@ async function openai(
     }
     if (j.error) throw new LlmError(`model error: ${j.error.message ?? j.error}`, 500);
     if (j.choices?.[0]?.finish_reason === 'length') truncated = true;
-    const c = j.choices?.[0]?.delta?.content;
+    const delta = j.choices?.[0]?.delta;
+    // Splash / vLLM stream thinking apart from the answer (`reasoning_content`; some servers say `reasoning`).
+    const r = delta?.reasoning_content ?? delta?.reasoning;
+    if (typeof r === 'string' && r) {
+      if (!firstTok) firstTok = performance.now();
+      onThink?.(r);
+    }
+    const c = delta?.content;
     if (c) {
       if (!firstTok) firstTok = performance.now();
       text += c;
@@ -533,7 +570,7 @@ export async function prewarm(s: Settings, msgs: ChatMsg[], signal?: AbortSignal
   // Nothing to load on a hosted model, and the Responses API can't cap the reply at one token: it would cost plan usage.
   if (s.kind === 'chatgpt') return 0;
   try {
-    await chat({ ...s, maxOutput: 1, effort: s.effort === 'default' ? 'default' : 'none' }, msgs, null, signal ?? AbortSignal.timeout(120000));
+    await chat({ ...s, maxOutput: 1, effort: s.effort === 'default' ? 'default' : 'none' }, msgs, null, signal ?? AbortSignal.timeout(120000), undefined, { cutoffOk: true });
   } catch {
     // ignore
   }

@@ -30,7 +30,7 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
   const root = () => findModal(doc) ?? doc.body ?? doc.documentElement;
 
   const resolve = (id: number) => {
-    const r = refs.resolve(id);
+    const r = refs.resolve(id, doc);
     return 'error' in r ? { error: `${prefix}${r.error}` } : r;
   };
 
