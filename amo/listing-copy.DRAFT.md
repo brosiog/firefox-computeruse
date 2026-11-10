@@ -44,7 +44,7 @@ What it does:
 
 Privacy: the extension has no server of its own. It has no analytics or telemetry and sends nothing to the developer.
 Page content goes only to the model server you choose, and to OpenAI if you choose ChatGPT sign-in. Full details:
-[PRIVACY POLICY URL, owner to publish, see amo/privacy-policy.DRAFT.md].
+https://github.com/brosiog/firefox-computeruse/blob/amo-declaration-140/PRIVACY.md
 
 Requires Firefox 140 or later. The data-collection categories declared for this add-on are browsing activity (tab
 addresses and titles), website content and authentication information.
@@ -57,9 +57,9 @@ addresses and titles), website content and authentication information.
 ## Links
 
 - Support email: [SUPPORT EMAIL, owner to fill in]
-- Support website: [SUPPORT URL, owner to fill in, or the repository's issue tracker]
-- Homepage: [HOMEPAGE URL, owner to choose; the repository https://github.com/brosiog/firefox-computeruse is a candidate]
-- Privacy policy: [PRIVACY POLICY URL, owner to publish]
+- Support website: https://github.com/brosiog/firefox-computeruse/issues
+- Homepage: https://github.com/brosiog/firefox-computeruse
+- Privacy policy: https://github.com/brosiog/firefox-computeruse/blob/amo-declaration-140/PRIVACY.md
 - License: Apache-2.0
 
 ## Version notes for 0.1.0
