@@ -128,3 +128,32 @@ describe('transcript()', () => {
     expect(!r.ok && r.error).toMatch(/embedded from another site \(www\.youtube\.com\)/);
   });
 });
+
+describe('YouTube player captions', () => {
+  const json3 = JSON.stringify({ events: [{ tStartMs: 2000, segs: [{ utf8: 'From the player.' }] }] });
+  it('reuses the caption URL the player requested, as json3, before anything else', async () => {
+    const seen: string[] = [];
+    const doc = at('https://www.youtube.com/watch?v=pl4y3r', '<video></video>');
+    const r = await transcript(doc, 0, 4000, undefined, fetchOf({ 'https://www.youtube.com/api/timedtext': json3 }, seen), 0, 'https://www.youtube.com/api/timedtext?v=pl4y3r&lang=en&kind=asr&pot=tok');
+    expect(r.ok && r.msg).toMatch(/YouTube captions \(en, auto-generated\)/);
+    expect(r.ok && r.msg).toContain('[0:02] From the player.');
+    expect(seen).toEqual(['https://www.youtube.com/api/timedtext?v=pl4y3r&lang=en&kind=asr&pot=tok&fmt=json3']);
+  });
+
+  it('ignores a player URL that is not youtube.com /api/timedtext', async () => {
+    const seen: string[] = [];
+    const doc = at('https://www.youtube.com/watch?v=pl4y3r', '<video></video>');
+    await transcript(doc, 0, 4000, undefined, fetchOf({}, seen), 0, 'https://evil.example/api/timedtext?x=1');
+    expect(seen.some(u => u.includes('evil.example'))).toBe(false);
+  });
+
+  it('switches the CC button and reports what it was', async () => {
+    const { toggleCaptions } = await import('../src/probe/transcript');
+    const doc = at('https://www.youtube.com/watch?v=cc1cc1', '<button class="ytp-subtitles-button" aria-pressed="false"></button>');
+    const b = doc.querySelector('button')!;
+    b.addEventListener('click', () => b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true')));
+    expect(toggleCaptions(doc, true)).toEqual({ ok: true, msg: 'was off' });
+    expect(b.getAttribute('aria-pressed')).toBe('true');
+    expect(toggleCaptions(doc, true)).toEqual({ ok: true, msg: 'was on' });
+  });
+});

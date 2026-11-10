@@ -495,8 +495,14 @@ export function createExecutor(o: ExecContext): Executor {
         return probe({ op: 'hover' }, a.ref);
       case 'read':
         return probe({ op: 'read', offset: a.offset ?? 0, budget: Math.min(6000, Math.max(2000, s.pageBudget)), query: a.query });
-      case 'transcript':
-        return probe({ op: 'transcript', offset: a.offset ?? 0, budget: Math.min(6000, Math.max(2000, s.pageBudget)), query: a.query });
+      case 'transcript': {
+        const cmd = { op: 'transcript' as const, offset: a.offset ?? 0, budget: Math.min(6000, Math.max(2000, s.pageBudget)), query: a.query };
+        // YouTube refuses most caption requests without its player's token: switch the player's captions on so it
+        // fetches them itself, and reuse the URL it asked for (the probe accepts only youtube.com /api/timedtext).
+        const yt = /^https:\/\/(www\.|m\.)?youtube\.com\/(watch|shorts|live)/.test(urlBefore) && host.playerCaptionUrl;
+        const url = yt ? await host.playerCaptionUrl!().catch(() => null) : null;
+        return probe(url ? { ...cmd, url } : cmd);
+      }
       case 'find':
         return probe({ op: 'find', text: a.text ?? a.query ?? '', limit: 15 });
       case 'navigate': {

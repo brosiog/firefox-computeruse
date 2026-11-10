@@ -14,7 +14,9 @@ export type ProbeCmd =
   | { op: 'read'; offset: number; budget: number; query?: string; plain?: boolean }
   | { op: 'find'; text: string; limit: number }
   /** The main video's captions as timestamped text (read-only; from the page's own site or its declared track). */
-  | { op: 'transcript'; offset: number; budget: number; query?: string }
+  | { op: 'transcript'; offset: number; budget: number; query?: string; url?: string }
+  /** YouTube: switches the player's captions on or off (so the player itself fetches them); says what they were. */
+  | { op: 'ytCaptions'; on: boolean }
   | { op: 'settle'; quietMs: number; maxMs: number }
   | { op: 'marks'; show: boolean }
   /** Finds the sign-in fields (in the form around `id`, or the frame). Reports which exist, never their values. */

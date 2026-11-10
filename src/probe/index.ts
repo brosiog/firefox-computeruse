@@ -6,7 +6,7 @@ import * as act from './actions';
 import { Refs } from './refs';
 import { fillLogin, loginForm } from './login';
 import { readPage, pickContentRoot } from './read';
-import { transcript } from './transcript';
+import { toggleCaptions, transcript } from './transcript';
 import { find, findModal, render, scrollFacts, describe } from './snapshot';
 
 export interface Probe {
@@ -120,9 +120,11 @@ export function createProbe(win: Window & typeof globalThis = window as Window &
             return { ok: true, msg: text, links: refs.hrefs() };
           }
           case 'transcript': {
-            const r = await transcript(doc, cmd.offset, cmd.budget, cmd.query);
+            const r = await transcript(doc, cmd.offset, cmd.budget, cmd.query, fetch, 6000, cmd.url);
             return r.ok ? { ok: true, msg: r.msg } : r;
           }
+          case 'ytCaptions':
+            return toggleCaptions(doc, cmd.on);
           case 'find': {
             const { lines, total } = find(root(), cmd.text, cmd.limit, prefix, refs, el => getFrameId(el), taint);
             if (!lines.length) return { ok: true, msg: `nothing on this page matches "${cmd.text}".` };
