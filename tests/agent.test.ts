@@ -481,3 +481,23 @@ describe('attached tabs', () => {
     expect(attachBudget({ pageBudget: 5000, contextWindow: 8192 }, 6)).toBe(1576);
   });
 });
+
+describe('transcript tool on YouTube', () => {
+  it('lets the player fetch its captions and passes that URL to the probe', async () => {
+    const cmds: any[] = [];
+    const host: any = {
+      tabId: 1,
+      act: async (_ref: string, cmd: any) => (cmds.push(cmd), { ok: true, msg: 'Transcript from YouTube captions (en), 1 lines' }),
+      settle: async () => '',
+      playerCaptionUrl: async () => 'https://www.youtube.com/api/timedtext?v=a&pot=t',
+    };
+    const ex = createExecutor({ host, settings: { ...DEFAULTS }, signal: new AbortController().signal, task: 'summarize', ui: { approve: async () => true, ask: async () => null } });
+    const r = await ex.execute({ tool: 'transcript' }, 'https://www.youtube.com/watch?v=a');
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain('<page>');
+    expect(cmds[0]).toMatchObject({ op: 'transcript', url: 'https://www.youtube.com/api/timedtext?v=a&pot=t' });
+    const r2 = await ex.execute({ tool: 'transcript' }, 'https://media.example/talk');
+    expect(r2.ok).toBe(true);
+    expect(cmds[1].url).toBeUndefined();
+  });
+});

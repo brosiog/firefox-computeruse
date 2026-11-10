@@ -150,6 +150,35 @@ async function youtubeCues(doc: Document, fetcher: typeof fetch): Promise<{ cues
   }
 }
 
+/** The caption request YouTube's own player made (seen by the extension), fetched again as json3. Only a
+ *  youtube.com /api/timedtext URL is accepted. */
+async function playerCues(url: string, doc: Document, fetcher: typeof fetch): Promise<Cue[]> {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return [];
+  }
+  if (!/(^|\.)youtube\.com$/.test(u.hostname) || u.pathname !== '/api/timedtext' || u.origin !== doc.location.origin) return [];
+  u.searchParams.set('fmt', 'json3');
+  const r = await fetcher(u.href, { credentials: 'same-origin' }).catch(() => null);
+  const body = r?.ok ? await r.text() : '';
+  try {
+    return body.trim() ? parseJson3(JSON.parse(body)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Switches the YouTube player's captions (the CC button) on or off; says whether they were on before. */
+export function toggleCaptions(doc: Document, on: boolean): { ok: true; msg: string } | { ok: false; error: string } {
+  const btn = doc.querySelector<HTMLElement>('.ytp-subtitles-button');
+  if (!btn) return { ok: false, error: 'no captions button on this player' };
+  const was = btn.getAttribute('aria-pressed') === 'true';
+  if (was !== on) btn.click();
+  return { ok: true, msg: was ? 'was on' : 'was off' };
+}
+
 /** YouTube's transcript panel ("Show transcript"), when it is open: exactly what a person sees. */
 function youtubePanel(doc: Document): Cue[] {
   const segs = doc.querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model');
@@ -197,14 +226,18 @@ async function openYoutubePanel(doc: Document, waitMs: number): Promise<Cue[]> {
   return [];
 }
 
-export async function transcript(doc: Document, offset: number, budget: number, query?: string, fetcher: typeof fetch = fetch, waitMs = 6000): Promise<{ ok: true; msg: string } | { ok: false; error: string }> {
+export async function transcript(doc: Document, offset: number, budget: number, query?: string, fetcher: typeof fetch = fetch, waitMs = 6000, playerUrl?: string): Promise<{ ok: true; msg: string } | { ok: false; error: string }> {
   const yt = /(^|\.)youtube\.com$/.test(doc.location.hostname);
   let cues: Cue[] = [];
   let source = '';
   if (yt) {
     cues = youtubePanel(doc);
     if (cues.length) source = 'YouTube transcript panel';
-    else {
+    if (!cues.length && playerUrl) {
+      cues = await playerCues(playerUrl, doc, fetcher);
+      if (cues.length) source = `YouTube captions (${new URL(playerUrl).searchParams.get('lang') ?? '?'}${new URL(playerUrl).searchParams.get('kind') === 'asr' ? ', auto-generated' : ''})`;
+    }
+    if (!cues.length) {
       const r = await youtubeCues(doc, fetcher);
       if (r && 'error' in r) {
         // YouTube often refuses caption requests without its player's token; its own transcript panel still works.

@@ -56,6 +56,8 @@ export interface Host {
   frameAliases?(): number[];
   /** Values filled from the password manager: scrubbed from all text this host returns from now on. */
   redact?(values: { username?: string; password?: string; totp?: string }): void;
+  /** YouTube: the caption URL the tab's own player requests when its captions are switched on (null if none). */
+  playerCaptionUrl?(): Promise<string | null>;
   /** Reads another tab's text without switching to it. Attached tabs are numbered right after the start tab. */
   readTab?(id: number, budget: number): Promise<TabRead>;
 }
@@ -343,6 +345,30 @@ export function createHost(initialTabId: number, windowId: number, attached: num
       tabId = next.id;
       await browser.tabs.update(tabId, { active: true });
       return `closed the tab; now on tab ${next.n}: ${next.title}`;
+    },
+
+    async playerCaptionUrl() {
+      let got: string | null = null;
+      const on = (d: { tabId: number; url: string }) => {
+        if (d.tabId === tabId && d.url.includes('/api/timedtext')) got = d.url;
+      };
+      browser.webRequest.onBeforeRequest.addListener(on, { urls: ['*://*.youtube.com/api/timedtext*'], tabId });
+      try {
+        const was = (await run(0, { op: 'ytCaptions', on: true })) as ProbeResult | undefined;
+        if (!was?.ok) return null;
+        // Already on: the player fetched them before we listened; switch off and on to make it ask again.
+        if (was.msg === 'was on') {
+          await run(0, { op: 'ytCaptions', on: false });
+          await run(0, { op: 'ytCaptions', on: true });
+        }
+        for (let i = 0; i < 24 && !got; i++) await new Promise(r => setTimeout(r, 250));
+        if (was.msg === 'was off') await run(0, { op: 'ytCaptions', on: false });
+      } catch {
+        return null;
+      } finally {
+        browser.webRequest.onBeforeRequest.removeListener(on);
+      }
+      return got;
     },
 
     async screenshot(marks) {
