@@ -535,3 +535,15 @@ describe('transcript tool on other players', () => {
     expect(r.text).toMatch(/no captions/);
   });
 });
+
+describe('transcript retries', () => {
+  it('tells the model plainly after a second miss on the same page', async () => {
+    const host: any = { tabId: 1, settle: async () => '', act: async () => ({ ok: false, error: 'YouTube did not return the captions. If the video has a transcript, open it (description → "Show transcript") and call transcript again.' }), playerCaptionUrl: async () => null };
+    const ex = createExecutor({ host, settings: { ...DEFAULTS }, signal: new AbortController().signal, task: 'x', ui: { approve: async () => true, ask: async () => null } });
+    const first = await ex.execute({ tool: 'transcript' }, 'https://www.youtube.com/watch?v=a');
+    expect(first.text).toContain('call transcript again');
+    const second = await ex.execute({ tool: 'transcript' }, 'https://www.youtube.com/watch?v=a');
+    expect(second.text).toContain('will not help');
+    expect(second.text).not.toContain('call transcript again');
+  });
+});
