@@ -1,7 +1,7 @@
 // The page state the model sees: what is on screen first, then a short look-ahead below, inside a character budget.
 // Truncation is always stated so the model knows to scroll or use find.
 
-import { clean, nameOf } from './dom';
+import { clean, nameOf, testLayout } from './dom';
 import type { Refs } from './refs';
 import { walk, Zone, type Item } from './walk';
 
@@ -34,6 +34,14 @@ export function findModal(doc: Document): Element | null {
     if (!modal) continue;
     const s = doc.defaultView!.getComputedStyle(el);
     if (s.display === 'none' || s.visibility === 'hidden') continue;
+    // A dialog left in the page but not on screen (inside a hidden ancestor, see-through, zero size: Amazon keeps its
+    // "List Price details" popover marked aria-modal) must not hide the page behind it.
+    const vis = (el as Element & { checkVisibility?: (o?: object) => boolean }).checkVisibility;
+    if (vis && !vis.call(el, { opacityProperty: true, visibilityProperty: true })) continue;
+    if (!testLayout()) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+    }
     return el;
   }
   return null;

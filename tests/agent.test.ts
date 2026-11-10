@@ -132,6 +132,39 @@ describe('runAgent', () => {
     expect(last[last.length - 1].content).toContain('<page>');
   });
 
+  it('catches a three-action cycle and then says to finish', async () => {
+    const replies = ['{"tool":"find","text":"x"}', '{"tool":"find","text":"close"}', '{"tool":"find","text":"Details"}'];
+    const seen: ChatMsg[][] = [];
+    await runAgent({
+      task: 'close the popup',
+      settings: { ...DEFAULTS, model: 'm', maxSteps: 14 },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async (_s, msgs) => {
+        seen.push(msgs);
+        return { text: replies[(seen.length - 1) % 3], usage: { totalMs: 1 }, mode: 'schema' };
+      },
+    });
+    const last = (i: number) => seen[i][seen[i].length - 1].content;
+    expect(seen.slice(0, 10).some((_, i) => last(i).includes("repeated the same action"))).toBe(true);
+    expect(seen.some((_, i) => last(i).includes('You are stuck'))).toBe(true);
+  });
+
+  it('asks again for an answer cut off at a double quote', async () => {
+    const replies = ['{"tool":"done","answer":"Video: "}', '{"tool":"done","answer":"Video: \'Top 10\' compares 4 earbuds."}'];
+    let n = 0;
+    const r = await runAgent({
+      task: 'summarize',
+      settings: { ...DEFAULTS, model: 'm' },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async () => ({ text: replies[n++], usage: { totalMs: 1 }, mode: 'schema' }),
+    });
+    expect(r.answer).toBe("Video: 'Top 10' compares 4 earbuds.");
+  });
+
   it('warns when the model alternates between the same two actions', async () => {
     const replies = ['{"tool":"click","ref":"1"}', '{"tool":"scroll","dir":"down"}'];
     const seen: ChatMsg[][] = [];
