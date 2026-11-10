@@ -413,7 +413,7 @@ export function createExecutor(o: ExecContext): Executor {
       // no current page
     }
     if (taskNames(u.hostname)) return null;
-    return `blocked by safety policy: ${u.origin} was not given by the user and no page you saw links to it. Open pages by clicking their links; if you need this site, ask the user.`;
+    return `blocked by safety policy: ${u.origin} was not given by the user and no page you saw links to it. ${s.webSearch ? 'Find the page with web_search first: its result links can then be opened. Or open' : 'Open'} pages by clicking their links; if you need this site, ask the user.`;
   }
 
   async function execute(a: Action, urlBefore: string): Promise<{ ok: boolean; text: string }> {
