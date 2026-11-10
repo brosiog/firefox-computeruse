@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Agent bridge for Firefox Computer Use: lets coding agents (Claude Code, Codex, Hermes, pi, …) drive the browser
+// Agent bridge for Firefox Browser Use: lets coding agents (Claude Code, Codex, Hermes, pi, …) drive the browser
 // through the extension. Zero dependencies, Node 18+.
 //
 //   node bridge/fcu.mjs                 MCP server on stdio (what harnesses launch)
@@ -77,7 +77,7 @@ function hubCall(cmd, timeoutMs) {
       : setTimeout(() => {
           if (extConnected() || !queue.includes(job)) return;
           queue.splice(queue.indexOf(job), 1);
-          job.reject(new Error(`Firefox Computer Use is not connected. Open its sidebar in Firefox (Ctrl+Shift+A, or Alt+Shift+A on Linux/Windows); its Agent bridge setting must be http://127.0.0.1:${PORT}.`));
+          job.reject(new Error(`Firefox Browser Use is not connected. Open its sidebar in Firefox (Ctrl+Shift+A, or Alt+Shift+A on Linux/Windows); its Agent bridge setting must be http://127.0.0.1:${PORT}.`));
         }, 5000);
     const done = fn => v => (clearTimeout(job.timer), clearTimeout(grace), fn(v));
     job.resolve = done(resolve);
@@ -334,7 +334,7 @@ function mcp() {
           protocolVersion: params?.protocolVersion ?? '2025-06-18',
           capabilities: { tools: {} },
           serverInfo: { name: 'firefox-computeruse', version: VERSION },
-          instructions: 'Drives the user\'s real Firefox through the Firefox Computer Use extension (its sidebar must be open). Start with browser_observe, act with browser_act using refs from the page state, or hand a whole chore to browser_task.',
+          instructions: 'Drives the user\'s real Firefox through the Firefox Browser Use extension (its sidebar must be open). Start with browser_observe, act with browser_act using refs from the page state, or hand a whole chore to browser_task.',
         });
       case 'ping':
         return reply(id, {});
@@ -375,7 +375,7 @@ async function cli(argv) {
       const p = hub ? { connected: extConnected() } : await post('/ping', {}, 3000);
       if (!p.connected && hub) await new Promise(res => setTimeout(res, 4000)); // let a sidebar between retries find us
       const ok = hub ? extConnected() : p.connected;
-      console.log(ok ? 'connected' : 'not connected: open the Firefox Computer Use sidebar');
+      console.log(ok ? 'connected' : 'not connected: open the Firefox Browser Use sidebar');
       process.exit(ok ? 0 : 1);
     }
     case 'observe':

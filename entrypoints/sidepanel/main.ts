@@ -475,7 +475,7 @@ $('at').onclick = () => {
 async function start(task: string, fromAgent?: { maxSteps?: number }, tabs: Attached[] = []): Promise<{ success: boolean; answer: string } | null> {
   if (running) return null;
   if (!settings.model) {
-    if (fromAgent) return { success: false, answer: 'No model is configured in the Firefox Computer Use settings.' };
+    if (fromAgent) return { success: false, answer: 'No model is configured in the Firefox Browser Use settings.' };
     openSettings();
     return null;
   }

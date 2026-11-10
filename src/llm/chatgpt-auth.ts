@@ -17,7 +17,7 @@ export const RESOURCE = 'https://api.openai.com/v1';
 const SCOPE = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
 const PLAN_SCOPE = 'chatgpt.tokens.use.direct';
 const DYNAMIC_CLIENT = 'dynamic_agent_client';
-const APP_NAME = 'Firefox Computer Use';
+const APP_NAME = 'Firefox Browser Use';
 const STORE_KEY = 'chatgptAuth';
 /** Refresh this long before the access token expires. */
 const REFRESH_EARLY_MS = 5 * 60_000;

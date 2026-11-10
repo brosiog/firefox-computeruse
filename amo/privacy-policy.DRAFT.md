@@ -4,11 +4,11 @@ For the owner to review, edit and approve before any AMO submission. Bracketed i
 fill in. This draft describes the code as of the amo-storefront-fixes branch.
 -->
 
-# Privacy Policy: Firefox Computer Use
+# Privacy Policy: Firefox Browser Use
 
 _Last updated: [DATE, owner to set]_
 
-Firefox Computer Use ("the extension") is a Firefox extension that runs a web agent in the Firefox sidebar. The agent
+Firefox Browser Use ("the extension") is a Firefox extension that runs a web agent in the Firefox sidebar. The agent
 reads the page in the current tab and can act on it, using a language model that **you** configure.
 
 **Short version:** the extension has no server of its own. It collects no analytics or telemetry, and sends nothing to
@@ -72,6 +72,11 @@ the agent and its provider.
 **Not done:** no advertising, no analytics, no crash reporting, no sale or sharing of data with third parties, and no
 data sent to the developer.
 
+**Data-collection categories declared to Mozilla (AMO):** `websiteContent` (page text and task text sent to the model
+server you configure, or to OpenAI with ChatGPT sign-in, and screenshots if vision is on) and `authenticationInfo`
+(the ChatGPT sign-in tokens, and the Bitwarden sign-in handling in section 3c). The extension does not declare any other
+category.
+
 ## 4. Permissions and why they are needed
 
 | Permission | Why |
@@ -104,8 +109,8 @@ confirm where the policy is published, e.g. the AMO listing and the repository R
 
 - [ ] Confirm the developer name and contact.
 - [ ] Set the "Last updated" date.
-- [ ] Confirm the AMO data-collection categories. `wxt.config.ts` still declares `data_collection_permissions: { required: ['none'] }`,
-      which this draft does not change. Page content sent to a configured server and the ChatGPT tokens may need declared
-      categories, so the declaration needs a decision before submission.
+- [ ] Confirm the AMO data-collection categories. `wxt.config.ts` now declares `data_collection_permissions: { required:
+      ['websiteContent', 'authenticationInfo'] }`, which section 3 describes. Decide whether tab addresses and titles (sent to
+      the model with the `tabs` permission) also need `browsingActivity`; this draft does not declare it.
 - [ ] Confirm that the statements about ChatGPT token storage (plain form in the profile) and revocation match the shipped build.
 - [ ] Confirm where the policy will be published, and that the AMO listing links to it.

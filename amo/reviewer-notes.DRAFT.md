@@ -3,7 +3,7 @@ DRAFT. NOT APPROVED. NOT SUBMITTED. For the owner to review before anything goes
 Bracketed items are owner decisions. Do not add credentials, account details or private network addresses here.
 -->
 
-# Reviewer notes: Firefox Computer Use (draft)
+# Reviewer notes: Firefox Browser Use (draft)
 
 ## What the extension is
 
@@ -98,7 +98,9 @@ hard-coded in the build. The default model URL is `localhost`.
 ## Data handling summary
 
 No analytics, telemetry or developer-side server. Page content and task text go to the model server the user configures,
-and to OpenAI only if the user chooses ChatGPT. Full details are in the privacy policy (draft:
+and to OpenAI only if the user chooses ChatGPT. The manifest declares the AMO data-collection categories
+`websiteContent` and `authenticationInfo` (`browser_specific_settings.gecko.data_collection_permissions` in `wxt.config.ts`).
+Full details are in the privacy policy (draft:
 `amo/privacy-policy.DRAFT.md`). [Owner to confirm the policy's final location and the AMO data-collection categories.]
 
 ## Optional local bridge

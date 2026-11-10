@@ -1,6 +1,6 @@
 <img src="assets/icon.svg" width="64" height="64" alt="">
 
-# firefox-computeruse
+# Firefox Browser Use
 
 A Firefox web agent built for **local models under 50B parameters**, running on macOS. It is a port and redesign of
 [Nanobrowser](https://github.com/nanobrowser/nanobrowser): the agent lives in the Firefox sidebar and drives the

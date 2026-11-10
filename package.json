@@ -1,5 +1,5 @@
 {
-  "name": "firefox-computeruse",
+  "name": "firefox-browser-use",
   "version": "0.1.0",
   "private": true,
   "description": "A lean Firefox web agent for local models (sub-50B), derived from Nanobrowser.",
