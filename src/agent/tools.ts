@@ -4,7 +4,7 @@
 
 export type ToolName =
   | 'click' | 'type' | 'select' | 'key' | 'scroll' | 'hover' | 'navigate' | 'back' | 'read' | 'find' | 'tab_new'
-  | 'tab_switch' | 'tab_close' | 'wait' | 'screenshot' | 'login' | 'ask' | 'done';
+  | 'tab_switch' | 'tab_close' | 'wait' | 'screenshot' | 'login' | 'web_search' | 'ask' | 'done';
 
 export interface Action {
   think?: string;
@@ -40,6 +40,8 @@ interface Spec {
   vision?: boolean;
   /** Offered only when Bitwarden logins are on. */
   login?: boolean;
+  /** Offered only when web search is on. */
+  search?: boolean;
 }
 
 export const TOOLS: Spec[] = [
@@ -59,17 +61,18 @@ export const TOOLS: Spec[] = [
   { name: 'wait', sig: '{"tool":"wait","seconds":2}', doc: 'wait for the page to finish loading or updating (max 10)', required: [] },
   { name: 'screenshot', sig: '{"tool":"screenshot"}', doc: 'look at the page as an image, with refs drawn on it', required: [], vision: true },
   { name: 'login', sig: '{"tool":"login","enter":true}', doc: 'sign in with the user\'s saved Bitwarden login for this site: fills the username, password or one-time code without showing them to you; enter:true submits; optional ref picks the form; option picks an account when several are listed', required: [], login: true },
+  { name: 'web_search', sig: '{"tool":"web_search","query":"python 3.14 release date"}', doc: 'search the web without opening a page: a few result titles, links and snippets; use it for quick facts and to find the right site, then read or open a result', required: ['query'], search: true },
   { name: 'ask', sig: '{"tool":"ask","text":"Which size?"}', doc: 'ask the user a question when you are missing information only they have', required: ['text'] },
   { name: 'done', sig: '{"tool":"done","answer":"...","success":true}', doc: 'finish: the answer or a summary of what you did; success:false if you could not do it', required: ['answer'] },
 ];
 
-export function toolsFor(vision: boolean, login = false): Spec[] {
-  return TOOLS.filter(t => (!t.vision || vision) && (!t.login || login));
+export function toolsFor(vision: boolean, login = false, search = false): Spec[] {
+  return TOOLS.filter(t => (!t.vision || vision) && (!t.login || login) && (!t.search || search));
 }
 
 /** JSON schema for one step. Property order matters to grammar-based decoders: think comes first. */
-export function actionSchema(vision: boolean, reasoning: boolean, login = false): object {
-  const names = toolsFor(vision, login).map(t => t.name);
+export function actionSchema(vision: boolean, reasoning: boolean, login = false, search = false): object {
+  const names = toolsFor(vision, login, search).map(t => t.name);
   const props: Record<string, object> = {};
   if (reasoning) props.think = { type: 'string', maxLength: 300 };
   props.tool = { type: 'string', enum: names };
@@ -115,6 +118,7 @@ const TOOL_ALIASES: Record<string, ToolName> = {
   search: 'find', search_page: 'find', extract: 'read', get_text: 'read', read_page: 'read', finish: 'done',
   complete: 'done', answer: 'done', go_back: 'back', select_option: 'select', new_tab: 'tab_new', open_tab: 'tab_new',
   switch_tab: 'tab_switch', close_tab: 'tab_close', ask_user: 'ask', scroll_down: 'scroll', scroll_up: 'scroll',
+  web: 'web_search', search_web: 'web_search', websearch: 'web_search', internet_search: 'web_search', google: 'web_search',
   sign_in: 'login', signin: 'login', log_in: 'login', autofill: 'login', fill_login: 'login',
 };
 
@@ -184,7 +188,7 @@ export function escapeInnerQuotes(j: string): string {
 
 export type Parsed = { ok: true; action: Action } | { ok: false; error: string };
 
-export function parseAction(raw: string, vision: boolean, login = false): Parsed {
+export function parseAction(raw: string, vision: boolean, login = false, search = false): Parsed {
   const j = extractJson(raw);
   if (!j) return { ok: false, error: 'Your reply had no JSON object. Reply with exactly one JSON action.' };
   let obj: any;
@@ -220,7 +224,7 @@ export function parseAction(raw: string, vision: boolean, login = false): Parsed
   // {"type": "..."} collides with the type tool's name: only treat it as the tool name if it names a tool.
   if (typeof rawTool !== 'string') return { ok: false, error: 'Missing "tool". Every reply needs "tool", e.g. {"tool":"click","ref":"12"}.' };
   rawTool = rawTool.trim().toLowerCase();
-  const allowed = toolsFor(vision, login).map(t => t.name) as string[];
+  const allowed = toolsFor(vision, login, search).map(t => t.name) as string[];
   const tool = (allowed.includes(rawTool) ? rawTool : TOOL_ALIASES[rawTool]) as ToolName | undefined;
   if (!tool || !allowed.includes(tool)) {
     return { ok: false, error: `Unknown tool "${rawTool}". Tools: ${allowed.join(', ')}.` };
@@ -239,7 +243,7 @@ export function parseAction(raw: string, vision: boolean, login = false): Parsed
   else if (rawTool === 'scroll_down') a.dir = 'down';
   else if (obj.dir ?? obj.direction) a.dir = String(obj.dir ?? obj.direction).toLowerCase() as Action['dir'];
   if (tool === 'scroll' && !a.dir) a.dir = 'down';
-  a.query = str(obj.query);
+  a.query = str(obj.query ?? (tool === 'web_search' ? (obj.q ?? obj.search ?? obj.text) : undefined));
   if (obj.offset !== undefined) a.offset = Number(obj.offset) || 0;
   if (obj.tab !== undefined) a.tab = Number(obj.tab);
   if (obj.seconds !== undefined) a.seconds = Number(obj.seconds);
@@ -255,7 +259,7 @@ export function parseAction(raw: string, vision: boolean, login = false): Parsed
   if (Array.isArray(obj.then) && obj.then.length) {
     const chain: Action[] = [];
     for (const [i, item] of obj.then.slice(0, MAX_CHAIN).entries()) {
-      const p = parseAction(JSON.stringify(item), vision, login);
+      const p = parseAction(JSON.stringify(item), vision, login, search);
       if (!p.ok) return { ok: false, error: `then[${i}]: ${p.error}` };
       if (!CHAINABLE.has(p.action.tool) || p.action.then) return { ok: false, error: `then[${i}]: only ${[...CHAINABLE].join(', ')} can be chained.` };
       delete p.action.think;
