@@ -69,7 +69,7 @@ export const PRESETS: Record<string, Preset> = {
   lmstudio: { label: 'LM Studio', kind: 'openai', baseUrl: 'http://localhost:1234/v1', hint: 'Developer → Start server' },
   llamacpp: { label: 'llama.cpp server', kind: 'openai', baseUrl: 'http://localhost:8080/v1', hint: 'llama-server -m model.gguf -c 16384 --jinja' },
   mlx: { label: 'MLX (mlx_lm.server)', kind: 'openai', baseUrl: 'http://localhost:8080/v1', hint: 'mlx_lm.server --model <repo>' },
-  openai: { label: 'OpenAI-compatible (other)', kind: 'openai', baseUrl: 'http://localhost:8000/v1', hint: 'vLLM, OpenRouter, …' },
+  openai: { label: 'OpenAI-compatible (other)', kind: 'openai', baseUrl: 'http://localhost:8000/v1', contextWindow: 131072, hint: 'vLLM, OpenRouter, …' },
 };
 
 export const DEFAULTS: Settings = {
@@ -78,7 +78,7 @@ export const DEFAULTS: Settings = {
   baseUrl: 'http://localhost:1234/v1',
   model: '',
   apiKey: '',
-  contextWindow: 65536,
+  contextWindow: 131072,
   maxOutput: 400,
   temperature: 0.2,
   maxSteps: 40,

@@ -9,7 +9,9 @@
 //
 // No timestamps or counters live in the reusable part of the prompt.
 
-import type { ChatMsg } from '../llm/client';
+import { estimateTokens, type ChatMsg } from '../llm/client';
+
+export { estimateTokens };
 import { toolsFor } from './tools';
 
 // Short notes for the tools whose signature does not say it all. Kept terse on purpose: the bench showed the full
@@ -113,9 +115,6 @@ export function buildMessages(
   });
   return msgs;
 }
-
-export const estimateTokens = (msgs: ChatMsg[]) =>
-  Math.ceil(msgs.reduce((n, m) => n + m.content.length + 12, 0) / 3.3) + msgs.reduce((n, m) => n + (m.images?.length ?? 0) * 800, 0);
 
 const stepTokens = (ss: Step[], withPages: boolean) =>
   ss.reduce((n, s) => n + s.action.length + s.result.length + (withPages ? (s.page?.length ?? 0) : 0) + 24, 0) / 3.3;

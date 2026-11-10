@@ -2,7 +2,7 @@
 // no second model. Everything the model sees per step is: fixed system prompt, the task, the compact action/result
 // history, and the current page state at the tail.
 
-import { chat as realChat, type ChatResult, type Usage } from '../llm/client';
+import { chat as realChat, LlmError, outputReserve, type ChatResult, type Usage } from '../llm/client';
 import type { Gate, ProbeResult, Risk } from '../protocol';
 import type { Settings } from '../settings';
 import { fence, toUrl, type Host } from '../browser/host';
@@ -148,7 +148,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     // Context budget: leave room for the model's output (and its thinking, if on).
     const mode = s.history ?? 'extend';
     const fixed = estimateTokens(buildMessages(system, task, [], tail, images));
-    const room = s.contextWindow - Math.max(s.maxOutput, s.effort === 'none' ? 0 : 4096) - 256;
+    const room = s.contextWindow - outputReserve(s) - 256;
     // Attached tabs are part of the fixed opening, not history: they do not eat into the history budget.
     const budget = mode === 'extend' ? Math.min(room, Math.max(4000, s.historyBudget ?? 16000) + att.tokens) : room;
     const c = compact(steps, budget, fixed, mode);
@@ -192,6 +192,17 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
       clearTimeout(slow);
       if (signal.aborted) return finish(false, 'Stopped.', n - 1);
       const msg = (e as Error).message ?? String(e);
+      if (e instanceof LlmError && e.kind === 'context') {
+        ui.event({ type: 'error', text: msg });
+        return finish(false, `The request did not fit the model server's context window. Set Settings → Context window to the server's real size (and check the server's own limit), or lower Model thinking, then run the task again. (${msg})`, n - 1);
+      }
+      if (e instanceof LlmError && e.kind === 'length') {
+        // Thinking used the whole output budget: tell the model and let it try again, at most a few times.
+        ui.event({ type: 'parse-error', raw: '', error: msg });
+        if (++parseFails >= 3) return finish(false, `The model kept running out of output budget before answering: ${msg}`, n);
+        steps.push({ page: tail, action: '(no answer: output budget used up while thinking)', result: 'Error: you ran out of output tokens while thinking. Think briefly and answer with one action.' });
+        continue;
+      }
       // One retry for transient failures (server restarting, model reloading after idle release).
       if (!/error 4\d\d/.test(msg) && llmRetries++ < 2) {
         ui.event({ type: 'error', text: `${msg} — retrying` });

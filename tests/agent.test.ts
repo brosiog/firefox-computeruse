@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { attachBudget, createExecutor, gatesFor, runAgent, type AgentEvent } from '../src/agent/loop';
 import { buildMessages, compact, systemPrompt } from '../src/agent/prompt';
 import { parseAction } from '../src/agent/tools';
 import type { Host, Observation } from '../src/browser/host';
-import { stripThinking, type ChatMsg } from '../src/llm/client';
-import { DEFAULTS } from '../src/settings';
+import { chat, fitOutput, LlmError, outputBudget, outputReserve, stripThinking, type ChatMsg } from '../src/llm/client';
+import { DEFAULTS, type Settings } from '../src/settings';
 
 describe('parseAction', () => {
   it('accepts the canonical form', () => {
@@ -480,4 +480,49 @@ describe('attached tabs', () => {
     expect(attachBudget({ pageBudget: 5000, contextWindow: 8192 }, 2)).toBe(4730);
     expect(attachBudget({ pageBudget: 5000, contextWindow: 8192 }, 6)).toBe(1576);
   });
+});
+
+describe('output budget and window fit', () => {
+  const base = { ...DEFAULTS, baseUrl: 'http://localhost:8000/v1', contextWindow: 131072 } as Settings;
+  const sse = (...chunks: object[]) => chunks.map(c => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n';
+  const ok = (finish = 'stop') => new Response(sse({ choices: [{ delta: { content: '{"tool":"done"}' }, finish_reason: finish }] }), { status: 200 });
+  const msgs: ChatMsg[] = [{ role: 'user', content: 'x'.repeat(33000) }]; // ~10K tokens
+  let n = 0;
+  const cfg = (o: Partial<Settings> = {}): Settings => ({ ...base, model: `m-${++n}`, ...o });
+
+  it('uses effort floors, and none means maxOutput', () => {
+    expect(outputBudget({ ...base, effort: 'none' })).toBe(400);
+    expect(outputBudget({ ...base, effort: 'xhigh' })).toBe(32768);
+    expect(outputBudget({ ...base, effort: 'high', maxOutput: 40000 })).toBe(40000);
+    expect(outputReserve({ ...base, effort: 'xhigh', contextWindow: 16384 })).toBe(8192);
+  });
+
+  it('clamps max_tokens so prompt + output fit the window', () => {
+    expect(fitOutput(32768, 131072, msgs)).toBe(32768);
+    const r = fitOutput(32768, 20000, msgs);
+    expect(r).toBeLessThan(20000 - 10000);
+    expect(r).toBeGreaterThan(256);
+    expect(fitOutput(32768, 9000, msgs)).toBe(256);
+  });
+
+  it('sends the clamped max_tokens and reports a cut-off (thinking) reply as a length error', async () => {
+    const sent: number[] = [];
+    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => (sent.push(JSON.parse(String(init.body)).max_tokens), ok('length')));
+    const e = await chat(cfg({ effort: 'xhigh', contextWindow: 40000 }), msgs, null, AbortSignal.timeout(5000)).catch(x => x);
+    expect(e).toBeInstanceOf(LlmError);
+    expect(e.kind).toBe('length');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toBeLessThan(40000 - 10000);
+  });
+
+  it('turns context_length_exceeded into a context error without downgrading structured output', async () => {
+    const sent: unknown[] = [];
+    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {
+      sent.push(JSON.parse(String(init.body)).response_format);
+      return new Response(JSON.stringify({ error: { message: "This model's maximum context length is 65536 tokens.", code: 'context_length_exceeded' } }), { status: 400 });
+    });
+    const e = await chat(cfg({ effort: 'none' }), msgs, { type: 'object' }, AbortSignal.timeout(5000)).catch(x => x);
+    expect(e.kind).toBe('context');
+    expect(sent).toHaveLength(1);
+});
 });
