@@ -11,6 +11,7 @@ import { actionSchema, canonical, extractJson, parseAction, type Action } from '
 import { login } from './login';
 import type { Vault } from '../vault';
 import { formatHits, webSearch as realSearch, type SearchHit } from '../search';
+import { captionFileTranscript } from '../probe/transcript';
 
 export type AgentEvent =
   | { type: 'step'; n: number }
@@ -501,7 +502,29 @@ export function createExecutor(o: ExecContext): Executor {
         // fetches them itself, and reuse the URL it asked for (the probe accepts only youtube.com /api/timedtext).
         const yt = /^https:\/\/(www\.|m\.)?youtube\.com\/(watch|shorts|live)/.test(urlBefore) && host.playerCaptionUrl;
         const url = yt ? await host.playerCaptionUrl!().catch(() => null) : null;
-        return probe(url ? { ...cmd, url } : cmd);
+        const r = await probe(url ? { ...cmd, url } : cmd);
+        if (r.ok || yt || !host.fetchCaption) return r;
+        // Other players (TikTok, X, Vimeo, news sites): caption files the page's own data lists, then the file the
+        // player itself fetches when its captions are switched on. Fetched by the extension, read as website text.
+        const listed = await host.act(undefined, { op: 'captionSources' }, gate).catch(() => null);
+        let urls: string[] = [];
+        try {
+          urls = listed?.ok ? JSON.parse(listed.msg) : [];
+        } catch {
+          urls = [];
+        }
+        const fromPlayer = async () => (host.playerCaptionUrl ? await host.playerCaptionUrl().catch(() => null) : null);
+        for (const u of [...urls, null]) {
+          const src = u ?? (await fromPlayer());
+          if (!src) continue;
+          const body = await host.fetchCaption(src);
+          const msg = body && captionFileTranscript(body, u ? 'the site\'s caption file' : 'the player\'s captions', cmd.offset, cmd.budget, cmd.query);
+          if (msg) {
+            noteFlagged(msg);
+            return { ok: true, text: `<page>\n${fence(msg)}\n</page>` };
+          }
+        }
+        return r;
       }
       case 'find':
         return probe({ op: 'find', text: a.text ?? a.query ?? '', limit: 15 });

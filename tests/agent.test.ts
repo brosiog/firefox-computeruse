@@ -626,3 +626,37 @@ describe('transcript tool on YouTube', () => {
     expect(cmds[1].url).toBeUndefined();
   });
 });
+
+describe('transcript tool on other players', () => {
+  const VTT = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello from the player.\n';
+  const base = (o: any) => ({
+    tabId: 1,
+    settle: async () => '',
+    act: async (_r: string, cmd: any) =>
+      cmd.op === 'transcript' ? { ok: false, error: 'this video has no captions the page provides' } : cmd.op === 'captionSources' ? { ok: true, msg: JSON.stringify(o.listed ?? []) } : { ok: true, msg: '' },
+    ...o,
+  });
+  const exec = (host: any) => createExecutor({ host, settings: { ...DEFAULTS }, signal: new AbortController().signal, task: 'summarize', ui: { approve: async () => true, ask: async () => null } });
+
+  it('reads a caption file the site lists (TikTok) before switching captions on', async () => {
+    const fetched: string[] = [];
+    const host = base({ listed: ['https://cdn.tiktokcdn.com/a.vtt'], fetchCaption: async (u: string) => (fetched.push(u), VTT), playerCaptionUrl: async () => { throw new Error('not needed'); } });
+    const r = await exec(host).execute({ tool: 'transcript' }, 'https://www.tiktok.com/@a/video/1');
+    expect(r.ok).toBe(true);
+    expect(r.text).toMatch(/<page>\nTranscript from the site's caption file, 1 lines[\s\S]*\[0:01\] Hello from the player\.\n<\/page>/);
+    expect(fetched).toEqual(['https://cdn.tiktokcdn.com/a.vtt']);
+  });
+
+  it('falls back to the file the player fetches when its captions are switched on', async () => {
+    const host = base({ fetchCaption: async () => VTT, playerCaptionUrl: async () => 'https://video.twimg.com/subs/en.vtt' });
+    const r = await exec(host).execute({ tool: 'transcript' }, 'https://x.com/a/status/1');
+    expect(r.ok && r.text).toMatch(/the player's captions/);
+  });
+
+  it('keeps the original error when nothing is found', async () => {
+    const host = base({ fetchCaption: async () => null, playerCaptionUrl: async () => null });
+    const r = await exec(host).execute({ tool: 'transcript' }, 'https://x.com/a/status/1');
+    expect(r.ok).toBe(false);
+    expect(r.text).toMatch(/no captions/);
+  });
+});
