@@ -10,6 +10,7 @@ import { attachedBlock, buildMessages, compact, estimateTokens, systemPrompt, ta
 import { actionSchema, canonical, extractJson, parseAction, type Action } from './tools';
 import { login } from './login';
 import type { Vault } from '../vault';
+import { formatHits, webSearch as realSearch, type SearchHit } from '../search';
 
 export type AgentEvent =
   | { type: 'step'; n: number }
@@ -101,13 +102,13 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
   const t0 = Date.now();
   // Benchmarks swap the system prompt (ablations, variants) without rebuilding; normal settings never set this.
   const vault = o.vault ?? null;
-  const system = s.systemOverride || systemPrompt({ vision: s.vision, reasoning: s.reasoning, login: !!vault });
+  const system = s.systemOverride || systemPrompt({ vision: s.vision, reasoning: s.reasoning, login: !!vault, search: s.webSearch });
   const date = (o.now?.() ?? new Date()).toISOString().slice(0, 10);
   // The task enables the executor's navigation-provenance and planted-answer tracking (see ExecContext.task).
   const exec = createExecutor({ host, settings: s, ui, signal, task: o.task, vault });
   const att = await readAttached(o, exec);
   const task = taskMessage(o.task, date, att.block);
-  const schema = actionSchema(s.vision, s.reasoning, !!vault);
+  const schema = actionSchema(s.vision, s.reasoning, !!vault, s.webSearch);
   let steps: Step[] = [];
   let prevRefs = new Set<string>();
   let lastKey = '';
@@ -206,7 +207,7 @@ export async function runAgent(o: RunOptions): Promise<{ success: boolean; answe
     llmRetries = 0;
     modelMs = performance.now() - tModel;
 
-    const parsed = parseAction(res.text, s.vision, !!vault);
+    const parsed = parseAction(res.text, s.vision, !!vault, s.webSearch);
     if (!parsed.ok) {
       ui.event({ type: 'parse-error', raw: res.text, error: parsed.error });
       trace({ raw: res.text, action: null, parseError: parsed.error });
@@ -303,6 +304,8 @@ export interface ExecContext {
   task?: string;
   /** Bitwarden; without it the login tool fails. */
   vault?: Vault | null;
+  /** Tests: replaces the network call behind the web_search tool. */
+  search?: (query: string, signal: AbortSignal) => Promise<SearchHit[]>;
   /** Tests: how long the login tool waits for a page still rendering its sign-in form. */
   loginRetryMs?: number;
 }
@@ -319,12 +322,27 @@ export interface Executor {
 }
 
 /** Executes actions against a host, with approval gating. Shared by the agent loop and the agent bridge. */
+const STOP = new Set(['the', 'a', 'an', 'of', 'for', 'and', 'or', 'in', 'on', 'to', 'at', 'is', 'what', 'how', 'best', 'top', 'vs', 'price', 'prices', 'lowest', 'cheapest', 'cheap', 'deal', 'deals', 'usd', 'buy', 'sale', 'cost', 'review', 'reviews']);
+/** A query's distinctive words (lowercase, no punctuation, no filler, no years), for spotting reworded repeats. */
+export function searchWords(q: string): Set<string> {
+  return new Set(q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w && !STOP.has(w) && !/^(19|20)\d\d$/.test(w)));
+}
+/** Jaccard overlap of two word sets. */
+export function overlap(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let n = 0;
+  for (const w of a) if (b.has(w)) n++;
+  return n / (a.size + b.size - n);
+}
+
 export function createExecutor(o: ExecContext): Executor {
   const { host, settings: s, signal } = o;
   const declined = new Set<string>();
   // Navigation provenance: URLs the agent may open by typing them. Pages can offer links (and the agent can click
   // them); a URL nobody offered, such as one carrying data to a third party, cannot be typed into the address bar.
   const knownUrls = new Set<string>();
+  // This task's web searches, to catch reworded repeats.
+  const searches: { q: string; words: Set<string> }[] = [];
   // Code-like tokens (letters+digits, 5+ chars) not in the task, seen in page lines that are flagged (⚠) or that
   // talk about what the agent's answer should contain. A page never needs to tell a site's visitor what to answer.
   const flaggedTokens = new Set<string>();
@@ -483,6 +501,31 @@ export function createExecutor(o: ExecContext): Executor {
           aborted: () => signal.aborted,
           retryMs: o.loginRetryMs,
         });
+      case 'web_search': {
+        if (!s.webSearch) return { ok: false, text: 'web search is not turned on. Use the browser.' };
+        const q = (a.query ?? '').trim();
+        if (!q) return { ok: false, text: '"web_search" needs "query".' };
+        // Near-repeats of an earlier search (live: 44 of 80 steps went to reworded price searches) cost a step and a
+        // network call for results already in the history: say so instead of searching again.
+        const words = searchWords(q);
+        const prev = searches.find(p => overlap(p.words, words) >= 0.75);
+        if (prev) return { ok: false, text: `you already searched for nearly this ("${prev.q.slice(0, 80)}"); its results are above. Open a result (navigate to its link) and read it, or search for something different.` };
+        searches.push({ q, words });
+        // The search words leave the browser (to Parallel), and a hijacked run could stuff page data into them, so
+        // every-action mode asks first; the length cap in webSearch limits what a query can carry at any level.
+        return gated(`search the web for "${q.slice(0, 80)}"`, async () => {
+          try {
+            const hits = await (o.search ?? realSearch)(q, signal);
+            for (const h of hits) knownUrls.add(h.url);
+            const out = formatHits(q, hits) + (searches.length >= 6 ? `\n(search ${searches.length} in this task: open the best result and read it instead of searching again)` : '');
+            noteFlagged(out);
+            // Results are website text: they go inside the page boundary, like read and find.
+            return `<page>\n${fence(out)}\n</page>`;
+          } catch (e) {
+            return `Error: ${fence(e instanceof Error ? e.message : String(e))}`;
+          }
+        });
+      }
       case 'ask': {
         const ans = await o.ui.ask(a.text ?? '');
         return ans === null ? { ok: false, text: 'the user did not answer.' } : { ok: true, text: `the user answered: ${ans}` };

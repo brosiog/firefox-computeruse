@@ -187,6 +187,23 @@ deterministic checks in the probe and the agent loop. None of them costs a model
 
 Benchmark and results: [bench/README.md](bench/README.md#security-prompt-injection).
 
+## Web search (opt-in)
+
+With *Settings → Let the agent search the web* on, the agent gets a `web_search` tool for quick facts and for finding the
+right site before it opens one, so it decides from search results instead of driving a search engine page. It uses
+[Parallel](https://parallel.ai)'s hosted Search MCP in its keyless mode: no account and no API key, at Parallel's anonymous
+rate limits. It is off by default.
+
+- **What leaves your computer:** only the search words the model writes (capped at 200 characters), sent to
+  `search.parallel.ai` under [Parallel's privacy policy](https://parallel.ai/privacy-policy). No page content, cookies or
+  tab information is sent.
+- **Safety:** results are website text, so they sit inside the `<page>` boundary like anything else the agent reads, and
+  pass the same planted-instruction checks. *Ask before every action* mode asks before each search. Result links count as
+  links the agent may open.
+- **Small context:** Parallel returns ~28 KB for ten results; the agent sees the top five, each cut to a title, link and
+  ~500 characters, about 2 KB.
+- **If it fails** (rate limit, offline) the tool says so and the agent carries on in the browser.
+
 ## Bitwarden logins (opt-in)
 
 The agent can sign in with your saved Bitwarden logins without seeing them. It never gets the username, password or
@@ -350,6 +367,7 @@ src/agent/    loop, prompt/history, tools + tolerant parser
 src/llm/      streaming client: OpenAI-compatible + Ollama native
 src/browser/  host: tabs, frames, navigation, screenshots
 src/bridge.ts agent bridge, extension side (poll loop, observe/act/task)
+src/search.ts Parallel keyless web search (trims results for small models)
 src/vault.ts  Bitwarden (bw serve) client and site matching; src/agent/login.ts and src/probe/login.ts do the fill
 bridge/       fcu.mjs: MCP stdio server + CLI + localhost hub; SKILL.md for CLI-only harnesses
 e2e/          fixture shop, fake model, Firefox runner
