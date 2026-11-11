@@ -8,24 +8,99 @@
 //   node bridge/fcu.mjs act '{"tool":"click","ref":"12"}' [--no-observe]   (one action or a JSON array)
 //   node bridge/fcu.mjs task "find the cheapest hub and report its price" [--max-steps 30]
 //   node bridge/fcu.mjs serve           run the hub on its own (optional)
+//   node bridge/fcu.mjs token           print the pairing token to paste in the sidebar's Settings → Agent bridge
 //
 // How it connects: the sidebar page long-polls a small HTTP hub on 127.0.0.1 (port 47823, FCU_BRIDGE_PORT). The first
 // bridge process to start becomes the hub; later ones (other harnesses, CLI calls) relay their calls through it, and
-// take over the port if the hub's process exits. Nothing listens beyond loopback.
+// take over the port if the hub's process exits. Nothing listens beyond loopback. The bridge is off in the extension
+// until the user enters the hub URL and the pairing token in Settings → Agent bridge.
 //
-// Web pages cannot use the hub: every request needs the `x-fcu` header (a cross-origin page can't send it without a
-// CORS preflight, which the hub never grants), a loopback Host (no DNS rebinding), and no Origin other than the
-// extension's own.
+// Pairing token: other local processes (other OS users included) can reach a loopback port, so the hub and the
+// extension share a secret. It is 32 random bytes made on first use and kept in $XDG_CONFIG_HOME/fcu/token (default
+// ~/.config/fcu/token; file 0600, directory 0700), or FCU_BRIDGE_TOKEN. Its UTF-8 text is the HMAC-SHA256 key for:
+//   - requests (/poll, /result, /call, /ping): `authorization: FCU <ms>.<nonce>.<hex mac>`, mac over
+//     "fcu-req\n<ms>\n<nonce>\n<path>\n<raw body>"; fresh (±60 s) and never reused. The token itself never goes on the
+//     wire, so a process squatting the port learns nothing. `authorization: Bearer <token>` works too (curl, scripts).
+//   - commands the hub hands the extension on /poll: { id, cmd: "<json text>", sig }, sig = hex mac over
+//     "<id>\n<session>\n<json text>". The extension runs only commands with a valid sig, so a fake hub can't drive it.
+//   - the hub's answer to /call: header `x-fcu-sig`, hex mac over "fcu-reply\n<request nonce>\n<raw body>", checked
+//     by the relaying process, so a fake hub can't feed agents made-up page states.
+//
+// Web pages cannot use the hub either: every request needs the `x-fcu` and `authorization` headers (a cross-origin page
+// can't send them without a CORS preflight, which the hub never grants), a loopback Host (no DNS rebinding), and no
+// Origin other than the extension's own.
 
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 const PORT = Number(process.env.FCU_BRIDGE_PORT || 47823);
 const HOST = '127.0.0.1';
 const VERSION = '0.1.0';
 const POLL_MS = 25000;
 const TIMEOUT = { status: 5000, observe: 120000, act: 300000, task: 1800000 };
+const AUTH_WINDOW_MS = 60000;
+
+// ---------------------------------------------------------------- pairing token
+
+const TOKEN_FILE = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'fcu', 'token');
+let tokenCache = null;
+
+/** The pairing token: FCU_BRIDGE_TOKEN, else the per-user token file (created on first use). */
+function token() {
+  if (tokenCache) return tokenCache;
+  const env = process.env.FCU_BRIDGE_TOKEN?.trim();
+  if (env) return (tokenCache = env);
+  const read = () => readFileSync(TOKEN_FILE, 'utf8').trim();
+  try {
+    tokenCache = read();
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    mkdirSync(dirname(TOKEN_FILE), { recursive: true, mode: 0o700 });
+    try {
+      // 'wx': if another bridge process wins the race, use its token.
+      writeFileSync(TOKEN_FILE, randomBytes(32).toString('base64url') + '\n', { mode: 0o600, flag: 'wx' });
+    } catch (e2) {
+      if (e2.code !== 'EEXIST') throw e2;
+    }
+    tokenCache = read();
+  }
+  // Tighten what may have been created loosely (umask, by hand). Best effort: not every filesystem has modes.
+  try {
+    chmodSync(dirname(TOKEN_FILE), 0o700);
+    chmodSync(TOKEN_FILE, 0o600);
+  } catch {}
+  if (!tokenCache) throw new Error(`${TOKEN_FILE} is empty: delete it to make a new pairing token`);
+  return tokenCache;
+}
+
+const mac = msg => createHmac('sha256', token()).update(msg).digest('hex');
+const sha = s => createHash('sha256').update(String(s)).digest();
+/** Constant-time string comparison (hashing first makes the lengths equal). */
+const same = (a, b) => timingSafeEqual(sha(a), sha(b));
+
+function authHeader(path, raw) {
+  const ts = Date.now();
+  const nonce = randomBytes(16).toString('base64url');
+  return { nonce, header: `FCU ${ts}.${nonce}.${mac(`fcu-req\n${ts}\n${nonce}\n${path}\n${raw}`)}` };
+}
+
+const nonces = new Map(); // nonce → when it was used (kept past AUTH_WINDOW_MS, so it can't be replayed)
+
+/** Checks a request's pairing token. Returns { nonce } (null for Bearer) when it is valid, false when not. */
+function authorized(req, raw) {
+  const a = String(req.headers.authorization ?? '');
+  if (a.startsWith('Bearer ')) return same(a.slice(7).trim(), token()) && { nonce: null };
+  const m = /^FCU (\d{1,16})\.([\w-]{16,64})\.([0-9a-f]{64})$/.exec(a);
+  if (!m) return false;
+  const [, ts, nonce, sig] = m;
+  if (Math.abs(Date.now() - Number(ts)) > AUTH_WINDOW_MS || nonces.has(nonce)) return false;
+  if (!same(sig, mac(`fcu-req\n${ts}\n${nonce}\n${req.url}\n${raw}`))) return false;
+  nonces.set(nonce, Date.now());
+  return { nonce };
+}
 
 // ---------------------------------------------------------------- hub
 
@@ -48,7 +123,9 @@ function deliver() {
   const job = queue.shift();
   job.session = sid;
   inflight.set(job.id, job);
-  send(w.res, 200, { id: job.id, cmd: job.cmd });
+  // The command goes as JSON text, signed byte for byte: the extension checks the sig before it parses anything.
+  const cmd = JSON.stringify(job.cmd ?? null);
+  send(w.res, 200, { id: job.id, cmd, sig: mac(`${job.id}\n${sid}\n${cmd}`) });
 }
 
 // A sidebar that stopped polling was closed or reloaded: its calls will never be answered.
@@ -60,6 +137,7 @@ setInterval(() => {
     }
   }
   for (const [sid, t] of seen) if (Date.now() - t > STALE_MS * 4) seen.delete(sid);
+  for (const [n, t] of nonces) if (Date.now() - t > AUTH_WINDOW_MS * 3) nonces.delete(n);
 }, 5000).unref();
 
 function hubCall(cmd, timeoutMs) {
@@ -77,7 +155,7 @@ function hubCall(cmd, timeoutMs) {
       : setTimeout(() => {
           if (extConnected() || !queue.includes(job)) return;
           queue.splice(queue.indexOf(job), 1);
-          job.reject(new Error(`Firefox Browser Use is not connected. Open its sidebar in Firefox (Ctrl+Shift+A, or Alt+Shift+A on Linux/Windows); its Agent bridge setting must be http://127.0.0.1:${PORT}.`));
+          job.reject(new Error(`Firefox Browser Use is not connected. Open its sidebar in Firefox (Ctrl+Shift+A, or Alt+Shift+A on Linux/Windows); in its Settings → Agent bridge, the URL must be http://127.0.0.1:${PORT} and the pairing token the one \`node bridge/fcu.mjs token\` prints.`));
         }, 5000);
     const done = fn => v => (clearTimeout(job.timer), clearTimeout(grace), fn(v));
     job.resolve = done(resolve);
@@ -87,11 +165,11 @@ function hubCall(cmd, timeoutMs) {
   });
 }
 
-function send(res, code, body) {
+function send(res, code, body, headers = () => ({})) {
   if (res.writableEnded) return;
   if (body === undefined) return res.writeHead(code).end();
   const s = JSON.stringify(body);
-  res.writeHead(code, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(s) }).end(s);
+  res.writeHead(code, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(s), ...headers(s) }).end(s);
 }
 
 function readBody(req) {
@@ -102,13 +180,7 @@ function readBody(req) {
       s += c;
       if (s.length > 64e6) req.destroy();
     });
-    req.on('end', () => {
-      try {
-        resolve(s ? JSON.parse(s) : {});
-      } catch (e) {
-        reject(e);
-      }
-    });
+    req.on('end', () => resolve(s));
     req.on('error', reject);
   });
 }
@@ -117,9 +189,16 @@ async function handle(req, res) {
   const origin = req.headers.origin;
   const hostOk = /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? '');
   if (req.method !== 'POST' || !req.headers['x-fcu'] || !hostOk || (origin && !origin.startsWith('moz-extension://'))) return send(res, 403, { error: 'forbidden' });
-  let body;
+  let raw, body;
   try {
-    body = await readBody(req);
+    raw = await readBody(req);
+  } catch {
+    return send(res, 400, { error: 'bad request' });
+  }
+  const auth = authorized(req, raw);
+  if (!auth) return send(res, 403, { error: 'forbidden: wrong or missing pairing token' });
+  try {
+    body = raw ? JSON.parse(raw) : {};
   } catch {
     return send(res, 400, { error: 'bad json' });
   }
@@ -151,10 +230,12 @@ async function handle(req, res) {
       return send(res, 204);
     }
     case '/call': {
+      // Signed, so the relaying process knows the answer came from a hub that has the token.
+      const sign = s => (auth.nonce ? { 'x-fcu-sig': mac(`fcu-reply\n${auth.nonce}\n${s}`) } : {});
       try {
-        send(res, 200, { result: await hubCall(body.cmd, body.timeoutMs ?? 60000) });
+        send(res, 200, { result: await hubCall(body.cmd, body.timeoutMs ?? 60000) }, sign);
       } catch (e) {
-        send(res, 200, { error: e.message });
+        send(res, 200, { error: e.message }, sign);
       }
       return;
     }
@@ -178,21 +259,24 @@ function listen() {
 function post(path, body, timeoutMs) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
-    const req = http.request(
-      { host: HOST, port: PORT, path, method: 'POST', headers: { 'x-fcu': '1', 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) }, timeout: timeoutMs },
-      res => {
-        let s = '';
-        res.setEncoding('utf8');
-        res.on('data', c => (s += c));
-        res.on('end', () => {
-          try {
-            resolve(s ? JSON.parse(s) : {});
-          } catch {
-            reject(new Error(`port ${PORT} is in use by something that is not the fcu bridge`));
-          }
-        });
-      },
-    );
+    const auth = authHeader(path, data);
+    const headers = { 'x-fcu': '1', authorization: auth.header, 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) };
+    const req = http.request({ host: HOST, port: PORT, path, method: 'POST', headers, timeout: timeoutMs }, res => {
+      let s = '';
+      res.setEncoding('utf8');
+      res.on('data', c => (s += c));
+      res.on('end', () => {
+        if (res.statusCode === 403) return reject(new Error(`the bridge hub on ${HOST}:${PORT} refused this process's pairing token (a hub run by another user? set FCU_BRIDGE_PORT)`));
+        const sig = String(res.headers['x-fcu-sig'] ?? '');
+        if (path === '/call' && !same(sig, mac(`fcu-reply\n${auth.nonce}\n${s}`)))
+          return reject(new Error(`the process on ${HOST}:${PORT} answered without the pairing token: it is not your fcu bridge hub (set FCU_BRIDGE_PORT)`));
+        try {
+          resolve(s ? JSON.parse(s) : {});
+        } catch {
+          reject(new Error(`port ${PORT} is in use by something that is not the fcu bridge`));
+        }
+      });
+    });
     req.on('timeout', () => req.destroy(new Error('timed out waiting for the bridge hub')));
     req.on('error', reject);
     req.end(data);
@@ -375,7 +459,7 @@ async function cli(argv) {
       const p = hub ? { connected: extConnected() } : await post('/ping', {}, 3000);
       if (!p.connected && hub) await new Promise(res => setTimeout(res, 4000)); // let a sidebar between retries find us
       const ok = hub ? extConnected() : p.connected;
-      console.log(ok ? 'connected' : 'not connected: open the Firefox Browser Use sidebar');
+      console.log(ok ? 'connected' : `not connected: open the Firefox Browser Use sidebar, with the URL http://${HOST}:${PORT} and the pairing token from \`node bridge/fcu.mjs token\` in its Settings → Agent bridge`);
       process.exit(ok ? 0 : 1);
     }
     case 'observe':
@@ -390,7 +474,12 @@ async function cli(argv) {
     case 'task':
       r = await call({ op: 'task', task: args.join(' '), maxSteps: maxSteps ? Number(maxSteps) : undefined });
       break;
+    case 'token':
+      console.log(token());
+      console.error(`Paste it in Firefox Browser Use → Settings → Agent bridge, with the URL http://${HOST}:${PORT}.`);
+      process.exit(0);
     case 'serve':
+      token(); // made now, so `token` and the first relay agree with this hub
       await ensure();
       if (!hub) {
         console.error(`a bridge hub already runs on ${HOST}:${PORT}`);
@@ -399,7 +488,7 @@ async function cli(argv) {
       console.error(`fcu bridge hub on http://${HOST}:${PORT}`);
       return;
     default:
-      console.error('usage: fcu.mjs [mcp | status | observe [--shot f.jpg] | act <json> [--no-observe] | task <text> [--max-steps n] | serve]');
+      console.error('usage: fcu.mjs [mcp | status | observe [--shot f.jpg] | act <json> [--no-observe] | task <text> [--max-steps n] | serve | token]');
       process.exit(2);
   }
   if (shot && r?.image) {

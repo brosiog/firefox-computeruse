@@ -137,6 +137,10 @@
         <label>Agent bridge (lets Claude Code, Codex, … use this browser; empty = off)
           <input name="bridgeUrl" placeholder="http://127.0.0.1:47823" />
         </label>
+        <label>Pairing token
+          <input name="bridgeToken" type="password" autocomplete="off" spellcheck="false" placeholder="output of: node bridge/fcu.mjs token" />
+        </label>
+        <p class="hint" id="bridgeHint"></p>
         <fieldset class="vault">
           <legend>Bitwarden logins</legend>
           <label class="check"><input name="vault" type="checkbox" /> Let the agent sign in with my saved logins (it never sees them)</label>

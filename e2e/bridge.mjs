@@ -3,6 +3,7 @@
 //
 //   pnpm e2e:bridge     (FIREFOX=/path/to/firefox to use another build)
 import { execFile, execSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import puppeteer from 'puppeteer-core';
@@ -18,7 +19,10 @@ const shop = `http://127.0.0.1:${PORTS.shop}`;
 execSync('pnpm exec wxt build -b firefox', { cwd: root, stdio: 'ignore', env: { ...process.env, WXT_BRIDGE_TEST: shop } });
 const port = process.env.FCU_BRIDGE_PORT ?? '47823';
 const script = resolve(root, 'bridge/fcu.mjs');
-const env = { ...process.env, FCU_BRIDGE_PORT: port };
+// A pairing token for this run only (the user's own token file is never touched): the fcu processes get it from the
+// environment, the panel from its settings.
+const token = randomBytes(32).toString('base64url');
+const env = { ...process.env, FCU_BRIDGE_PORT: port, FCU_BRIDGE_TOKEN: token };
 // Async on purpose: the fixture shop is served from this process, so a sync child call would stall every page load.
 const fcu = (...args) =>
   new Promise(res => execFile(process.execPath, [script, ...args], { env, encoding: 'utf8' }, (e, so, se) => res({ ok: !e, out: `${so}${e ? se : ''}` })));
@@ -45,7 +49,7 @@ state.config = { settings: {}, task: '', tabUrl: shop };
 // Bitwarden logins on, for agents too, through the fake bw serve (asks before each fill, answered below).
 const PW = 'correct-horse-battery-staple';
 const EMAIL = 'ada@example.test';
-state.bridgeSettings = { vault: true, vaultUrl: `http://localhost:${PORTS.bw}`, vaultAsk: true, vaultAgents: true };
+state.bridgeSettings = { bridgeUrl: `http://127.0.0.1:${port}`, bridgeToken: token, vault: true, vaultUrl: `http://localhost:${PORTS.bw}`, vaultAsk: true, vaultAgents: true };
 state.bw.items = [{ id: 'it1', type: 1, name: 'Hub Shop', login: { username: EMAIL, password: PW, uris: [{ uri: shop, match: null }] } }];
 const browser = await puppeteer.launch({
   browser: 'firefox',

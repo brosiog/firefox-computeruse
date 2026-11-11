@@ -6,6 +6,7 @@
 //   node e2e/screens.mjs [outDir]       (default e2e/.results/screens)
 //   DARK=1 node e2e/screens.mjs         the same in dark mode
 import { execSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import http from 'node:http';
 import { resolve } from 'node:path';
@@ -20,6 +21,8 @@ const dark = !!process.env.DARK;
 const sfx = dark ? '-dark' : '';
 const PORT = 8797;
 const BW_PORT = 8798;
+// A pairing token for this run only: fcu.mjs gets it from the environment, the panel from /e2e/settings.
+const BRIDGE_TOKEN = randomBytes(32).toString('base64url');
 
 // ---------- a small, believable site ----------
 const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>
@@ -47,7 +50,7 @@ const web = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/e2e/settings') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ vault: true, vaultUrl: `http://localhost:${BW_PORT}`, vaultAsk: true, vaultAgents: true, bridgeUrl: 'http://127.0.0.1:47829', model: 'local-model' }));
+    return res.end(JSON.stringify({ vault: true, vaultUrl: `http://localhost:${BW_PORT}`, vaultAsk: true, vaultAgents: true, bridgeUrl: 'http://127.0.0.1:47829', bridgeToken: BRIDGE_TOKEN, model: 'local-model' }));
   }
   if (u.pathname === '/e2e/approve') {
     approvals.push(u.searchParams.get('what'));
@@ -98,7 +101,7 @@ const browser = await puppeteer.launch({
     'dom.timeout.enable_budget_timer_throttling': false,
   },
 });
-const env = { ...process.env, FCU_BRIDGE_PORT: '47829' };
+const env = { ...process.env, FCU_BRIDGE_PORT: '47829', FCU_BRIDGE_TOKEN: BRIDGE_TOKEN };
 const mcp = spawn(process.execPath, [resolve(root, 'bridge/fcu.mjs')], { env, stdio: ['pipe', 'pipe', 'inherit'] });
 const pending = new Map();
 let buf = '';

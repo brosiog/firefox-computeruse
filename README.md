@@ -7,7 +7,9 @@ A Firefox web agent built for **local models under 50B parameters**, running on 
 current tab. The default configuration targets an OpenAI-compatible server on `localhost:1234` (LM Studio's port), with
 no model preselected. Any OpenAI-compatible endpoint works, as does Ollama's native API.
 
-The whole extension is about 83 kB: no framework, no AI SDK, no runtime dependencies.
+The whole extension is about 178 kB: no framework, no AI SDK, no runtime dependencies.
+
+To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Install (Firefox 128+)
 
@@ -46,10 +48,27 @@ one of them. Notes:
   and less on small context windows.
 - Tabs Firefox has unloaded are reloaded first. Pages extensions cannot read (`about:`, AMO) are left out of the list.
 
+## Conversations and things to remember
+
+Each message you send sees the earlier turns of the conversation, so follow-ups like *"do it again for the second one"*
+work. The agent gets the last 8 requests and answers, shortened, in the fixed opening of the request. *New task* (the
+pencil button in the header) starts a fresh conversation.
+
+- **Past conversations.** The clock button in the header lists saved conversations. Open one to read it or carry on,
+  × deletes it, and *Delete all* clears the list. Only your requests and the agent's answers are saved, not page
+  contents, in this browser's extension storage. *Settings → Keep past conversations* deletes ones not touched for 1, 7, 30 or 90 days
+  (default: keep until you delete them). At most 200 are kept.
+- **Things to remember.** Notes in *Settings → Things to remember*, one per line in plain words, are sent to the model
+  with every task. A line that starts with a site (`amazon.com: ship to my work address`) is sent only when that site
+  is in the task or the tabs. Typing *"remember that I prefer aisle seats"* in the chat saves a note without running a
+  task. Don't put passwords or card numbers there.
+- Tasks delegated over the agent bridge get the notes, not the sidebar conversation.
+
+## Model servers
 
 | Preset | API | Notes |
 | --- | --- | --- |
-| **LM Studio (default)** | OpenAI-compatible, `http://localhost:1234/v1`, model picked from the server's list, 64K | |
+| **LM Studio (default)** | OpenAI-compatible, `http://localhost:1234/v1`, model picked from the server's list, 128K context | |
 | Splash / vLLM on another machine | OpenAI-compatible, `http://<host>:8000/v1`, type the URL and model under *Other* | Sends `reasoning_effort` (default `none`). Servers that reload a model on first use (Splash) can take ~30 s on that first request; the panel says so. |
 | llama.cpp | `http://localhost:8080/v1` | Use `--jinja`; `cache_prompt` is sent. |
 | MLX (`mlx_lm.server`) | `http://localhost:8080/v1` | |
@@ -268,8 +287,9 @@ Limits:
 
 ## Coding agents (MCP and CLI)
 
-`bridge/fcu.mjs` connects coding agents to the browser. It is one Node file with no dependencies. The sidebar
-long-polls it on `127.0.0.1:47823`; set this in *Settings → Agent bridge*, or leave the field empty to turn it off. An
+`bridge/fcu.mjs` connects coding agents to the browser. It is one Node file with no dependencies. The bridge is off by
+default. To pair it, run `node bridge/fcu.mjs token` and paste its output, with the URL `http://127.0.0.1:47823`, in
+*Settings → Agent bridge*. The sidebar then long-polls the hub on that port. Clear either field to turn it off. An
 **agents** pill shows in the header while an agent is connected. Agents get three tools:
 
 | Tool | What it does |
@@ -305,8 +325,14 @@ node bridge/fcu.mjs task "find the cheapest USB-C hub here and report its price"
 ```
 
 Several harnesses can run at once. The first bridge process becomes the hub, and later ones relay through it. If the
-hub's process exits, the next call takes over the port. Commands run one at a time. The hub refuses web pages: it
-requires an `x-fcu` header (which needs a CORS preflight it never grants), a loopback `Host`, and no foreign `Origin`.
+hub's process exits, the next call takes over the port. Commands run one at a time.
+
+Any local process, including other users' processes, can reach a loopback port, so the hub and the sidebar share a
+pairing token. The token is 32 random bytes, created on first use in `~/.config/fcu/token` (or
+`$XDG_CONFIG_HOME/fcu/token`; mode 0600) or taken from `FCU_BRIDGE_TOKEN`. Every request carries an HMAC made with the
+token, never the token itself. The sidebar runs only commands the hub signed with it, so a process without the token
+can neither drive the browser nor pose as the hub. Web pages are refused too: the hub requires `x-fcu` and
+`authorization` headers (which need a CORS preflight it never grants), a loopback `Host`, and no foreign `Origin`.
 
 ## Development
 
@@ -368,6 +394,7 @@ src/llm/      streaming client: OpenAI-compatible + Ollama native
 src/browser/  host: tabs, frames, navigation, screenshots
 src/bridge.ts agent bridge, extension side (poll loop, observe/act/task)
 src/search.ts Parallel keyless web search (trims results for small models)
+src/chats.ts  saved conversations and the earlier turns sent with a follow-up; src/memory.ts: things to remember
 src/vault.ts  Bitwarden (bw serve) client and site matching; src/agent/login.ts and src/probe/login.ts do the fill
 bridge/       fcu.mjs: MCP stdio server + CLI + localhost hub; SKILL.md for CLI-only harnesses
 e2e/          fixture shop, fake model, Firefox runner
@@ -379,7 +406,6 @@ e2e/          fixture shop, fake model, Firefox runner
 - File uploads (Firefox can't set file inputs from an extension without a native helper), and drag and drop.
 - Real trusted input (`isTrusted` events). That would need a native-messaging helper driving Firefox over WebDriver BiDi,
   which only matters for the few sites that check.
-- Persisted conversations and follow-up messages in the same run.
 - Injection in screenshots (vision mode) is not covered by the text detector; VPI-Bench-style visual attacks are untested.
 - No checks yet with a real Firefox on macOS, only headless Firefox on Linux. The extension has no platform-specific code
   apart from the `MacCtrl` shortcut.

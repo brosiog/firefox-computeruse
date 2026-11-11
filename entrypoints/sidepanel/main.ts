@@ -726,7 +726,24 @@ function fill(s: Settings) {
   presetSel.value = match?.[0] ?? '';
   $('presetHint').textContent = match?.[1].hint ?? '';
   syncKind();
+  syncBridgeHint();
 }
+
+// Agent bridge: off unless both the URL and the pairing token are set; say what is missing.
+const bridgeUrlIn = form.elements.namedItem('bridgeUrl') as HTMLInputElement;
+const bridgeTokenIn = form.elements.namedItem('bridgeToken') as HTMLInputElement;
+function syncBridgeHint() {
+  const url = bridgeUrlIn.value.trim();
+  const tok = bridgeTokenIn.value.trim();
+  const hint = $('bridgeHint');
+  hint.classList.toggle('err', !!url && !tok);
+  const cmd = el('code', undefined, 'node bridge/fcu.mjs token');
+  if (!url) hint.replaceChildren('Off. To pair a coding agent, enter the hub URL and the token that ', cmd, ' prints.');
+  else if (!tok) hint.replaceChildren('Needs a pairing token: run ', cmd, ' and paste its output here. Until then the bridge stays off.');
+  else hint.replaceChildren('The sidebar runs only commands signed with this token.');
+}
+bridgeUrlIn.addEventListener('input', syncBridgeHint);
+bridgeTokenIn.addEventListener('input', syncBridgeHint);
 
 // ChatGPT plan: sign-in box instead of a server URL and key.
 const kindSel = form.elements.namedItem('kind') as HTMLSelectElement;
@@ -905,15 +922,21 @@ const bridgeHandle = createBridgeHandler({
   vault: () => vaultFor(true),
   note: (text, ok) => add(el('div', `note${ok ? '' : ' err'}`, text)),
 });
-let bridge: { url: string; stop: () => void } | null = null;
+let bridge: { key: string; stop: () => void } | null = null;
 function connectBridge() {
   // e2e:bridge builds: Firefox also opens the real sidebar at install; only the panel tab under test may take agent
   // commands, or the hub would split them between two panels.
   const testSidebar = !!import.meta.env.WXT_BRIDGE_TEST && !new URLSearchParams(location.search).get('tabUrl');
   const url = e2eUrl || testSidebar ? '' : settings.bridgeUrl.trim();
-  if (bridge?.url === url) return;
+  // Both are needed: a URL without the pairing token (e.g. saved by an older version, when the bridge was on by
+  // default) does not connect.
+  const token = settings.bridgeToken.trim();
+  const key = url && token ? `${url}\n${token}` : '';
+  if ((bridge?.key ?? '') === key) return;
   bridge?.stop();
-  bridge = url ? { url, stop: startBridge(url, bridgeHandle, up => ($('agents').hidden = !up)) } : null;
+  bridge = key
+    ? { key, stop: startBridge(url, token, bridgeHandle, up => ($('agents').hidden = !up), text => add(el('div', 'note err', text))) }
+    : null;
 }
 
 async function refreshStatus() {

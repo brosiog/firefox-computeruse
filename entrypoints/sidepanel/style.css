@@ -183,6 +183,7 @@ main {
 }
 .suggest button:hover { background: var(--hover); color: var(--fg); }
 .hint { color: var(--muted); font-size: 12.5px; }
+.hint.err { color: var(--err); }
 
 .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.user {

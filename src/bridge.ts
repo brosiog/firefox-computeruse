@@ -192,31 +192,93 @@ export function createBridgeHandler(d: BridgeDeps) {
   };
 }
 
+// ---------- pairing token (see bridge/fcu.mjs for the protocol) ----------
+// The hub and the sidebar share a token the user pastes into Settings. Its UTF-8 text is an HMAC-SHA256 key: each
+// request carries a fresh MAC (the token itself is never sent, so a process squatting the port learns nothing), and the
+// sidebar runs only commands whose sig proves the hub has the token.
+
+const enc = new TextEncoder();
+const toHex = (b: ArrayBuffer) => Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join('');
+const fromHex = (s: string) => (/^[0-9a-f]{64}$/.test(s) ? new Uint8Array(s.match(/../g)!.map(h => parseInt(h, 16))) : null);
+const nonce = () => {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+export function bridgeKey(token: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey('raw', enc.encode(token.trim()), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+}
+
+/** `authorization` value for one request: "FCU <ms>.<nonce>.<hex mac>". */
+export async function bridgeAuth(key: CryptoKey, path: string, body: string): Promise<string> {
+  const ts = Date.now();
+  const n = nonce();
+  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(`fcu-req\n${ts}\n${n}\n${path}\n${body}`));
+  return `FCU ${ts}.${n}.${toHex(mac)}`;
+}
+
+/** The command in a /poll reply, or null when its sig is not the hub's (wrong token, or not our hub). The sig covers
+ *  "<id>\n<session>\n<cmd JSON text>" exactly as received, and is checked before the text is parsed. */
+export async function openBridgeCmd(key: CryptoKey, session: string, msg: unknown): Promise<{ id: string; cmd: BridgeCmd } | null> {
+  const { id, cmd, sig } = (msg ?? {}) as Record<string, unknown>;
+  if (typeof id !== 'string' || typeof cmd !== 'string' || typeof sig !== 'string') return null;
+  const bytes = fromHex(sig);
+  if (!bytes || !(await crypto.subtle.verify('HMAC', key, bytes, enc.encode(`${id}\n${session}\n${cmd}`)))) return null;
+  try {
+    const parsed = JSON.parse(cmd);
+    return parsed && typeof parsed === 'object' && typeof parsed.op === 'string' ? { id, cmd: parsed } : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Polls the hub until stopped. Calls `onState` when the connection comes or goes. Without a hub (no agent running)
- * it retries every 2 s: a refused loopback connection costs nothing.
+ * Polls the hub until stopped. Calls `onState` when the connection comes or goes, and `onIssue` (once per kind) when
+ * the hub refuses the token or sends a command that is not signed with it. Without a hub (no agent running) it retries
+ * every 2 s: a refused loopback connection costs nothing.
  */
-export function startBridge(url: string, handle: (cmd: BridgeCmd) => Promise<BridgeResult>, onState: (up: boolean) => void): () => void {
+export function startBridge(
+  url: string,
+  token: string,
+  handle: (cmd: BridgeCmd) => Promise<BridgeResult>,
+  onState: (up: boolean) => void,
+  onIssue: (text: string) => void = () => {},
+): () => void {
   const base = url.replace(/\/+$/, '');
   const session = crypto.randomUUID();
-  const headers = { 'x-fcu': '1', 'content-type': 'application/json' };
   let stopped = false;
   let up = false;
   const ctrl = new AbortController();
   const set = (v: boolean) => {
     if (v !== up) onState((up = v));
   };
+  const told = new Set<string>();
+  const issue = (kind: string, text: string) => {
+    if (!told.has(kind)) told.add(kind), onIssue(text);
+  };
+  const ran = new Set<string>(); // command ids already run: a replayed command is dropped
+  const keyP = bridgeKey(token);
+  const post = async (path: string, payload: unknown, signal?: AbortSignal) => {
+    const body = JSON.stringify(payload);
+    const headers = { 'x-fcu': '1', 'content-type': 'application/json', authorization: await bridgeAuth(await keyP, path, body) };
+    return fetch(`${base}${path}`, { method: 'POST', headers, body, signal });
+  };
   (async () => {
     while (!stopped) {
       try {
-        const r = await fetch(`${base}/poll`, { method: 'POST', headers, body: JSON.stringify({ session }), signal: ctrl.signal });
+        const r = await post('/poll', { session }, ctrl.signal);
+        if (r.status === 403) issue('403', `Agent bridge: the hub at ${base} refused the pairing token. Run \`node bridge/fcu.mjs token\` and paste it in Settings.`);
         if (r.status !== 200 && r.status !== 204) throw new Error(`HTTP ${r.status}`);
         set(true);
         if (r.status === 204) continue;
-        const { id, cmd } = await r.json();
-        void handle(cmd).then(result =>
-          fetch(`${base}/result`, { method: 'POST', headers, body: JSON.stringify({ id, session, result }) }).catch(() => {}),
-        );
+        const job = await openBridgeCmd(await keyP, session, await r.json());
+        if (!job || ran.has(job.id)) {
+          issue('sig', `Agent bridge: ignored a command from ${base} that was not signed with the pairing token (not your fcu hub, or a different token).`);
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        ran.add(job.id);
+        void handle(job.cmd).then(result => post('/result', { id: job.id, session, result }).catch(() => {}));
       } catch {
         set(false);
         if (!stopped) await new Promise(r => setTimeout(r, 2000));
