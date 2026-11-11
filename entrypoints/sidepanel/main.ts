@@ -270,7 +270,7 @@ let warming: Promise<number> | null = null;
 function warm(): Promise<number> {
   if (!settings.model || Date.now() - warmedAt < 120000) return warming ?? Promise.resolve(0);
   warmedAt = Date.now();
-  const sys = settings.systemOverride || systemPrompt({ vision: settings.vision, reasoning: settings.reasoning, login: !!vaultFor(false) });
+  const sys = settings.systemOverride || systemPrompt({ vision: settings.vision, reasoning: settings.reasoning, login: !!vaultFor(false), search: settings.webSearch });
   warming = prewarm(settings, primer(sys));
   return warming;
 }
