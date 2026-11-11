@@ -98,7 +98,7 @@ button.icon {
 button.icon svg { width: 18px; height: 18px; }
 button.icon:hover { background: var(--hover); color: var(--fg); }
 
-input, select {
+input, select, dialog textarea {
   font: inherit;
   font-size: 13px;
   color: var(--field-fg);
@@ -107,7 +107,7 @@ input, select {
   border-radius: 10px;
   padding: 7px 10px;
 }
-input:hover, select:hover { border-color: var(--field-line); }
+input:hover, select:hover, dialog textarea:hover { border-color: var(--field-line); }
 input[type='checkbox'] { accent-color: var(--accent); margin: 0; width: 16px; height: 16px; padding: 0; }
 
 /* ---------- header ---------- */
@@ -463,3 +463,17 @@ fieldset.vault #vaultPw { flex: 1 1 140px; min-width: 0; }
   color: var(--fg);
   font-size: 12.5px;
 }
+
+/* Past conversations */
+.hist { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.hist h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.hist-list { display: flex; flex-direction: column; gap: 2px; max-height: 55vh; overflow-y: auto; scrollbar-width: thin; }
+.hist-item { display: flex; align-items: center; gap: 6px; border-radius: var(--r-lg); }
+.hist-item:hover, .hist-item.cur { background: var(--hover); }
+.hist-open { flex: 1; min-width: 0; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 8px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.hist-open b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-open span { font-size: 11.5px; color: var(--muted); }
+.hist-del { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; padding: 4px 10px; border-radius: 6px; }
+.hist-del:hover { color: var(--err); }
+.hist-empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
+dialog textarea { resize: vertical; min-height: 72px; line-height: 1.4; }

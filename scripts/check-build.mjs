@@ -20,8 +20,10 @@ const EXPECT = {
   hostPermissions: ['<all_urls>'],
   // Total bytes in dist/. ~146 kB: main is ~123 kB (prompt-injection defenses, Sign in with ChatGPT, @-attached tabs)
   // and Bitwarden logins add ~23 kB (sign-in field finder, redaction, vault client); the themed chat-style sidebar adds
-  // ~7 kB (browser-theme mapping, styles, icons), ~153 kB in all. The budget leaves room to grow, not to double.
-  maxBytes: 165_000,
+  // ~7 kB (browser-theme mapping, styles, icons), ~153 kB in all; approval levels, the AMO release and web search bring it to ~165 kB,
+  // and conversation memory, past conversations and saved notes add ~4 kB (~169 kB). The budget leaves room to grow,
+  // not to double.
+  maxBytes: 175_000,
 };
 // Strings that only exist in test-only code paths (tree-shaken from release builds): the background job loop, the
 // sidebar's e2e/bench harness, and the step traces the bench records.

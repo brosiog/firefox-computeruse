@@ -132,6 +132,23 @@ describe('runAgent', () => {
     expect(last[last.length - 1].content).toContain('<page>');
   });
 
+  it('opens the task message with the conversation context, the same on every step', async () => {
+    const seen: ChatMsg[][] = [];
+    const replies = ['{"tool":"scroll","dir":"down"}', '{"tool":"done","answer":"ok"}'];
+    await runAgent({
+      task: 'and the second one?',
+      context: 'Earlier in this conversation:\nUser: list hubs\nYou answered: A, B',
+      settings: { ...DEFAULTS, model: 'm' },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async (_s, msgs) => (seen.push(msgs), { text: replies[seen.length - 1], usage: { totalMs: 1 }, mode: 'schema' }),
+    });
+    const first = (m: ChatMsg[]) => m.find(x => x.role === 'user' && x.content.includes('Task:'))!.content;
+    expect(first(seen[0])).toMatch(/^Earlier in this conversation:[\s\S]*You answered: A, B\n\nTask: and the second one\?/);
+    expect(first(seen[1]).split('<page>')[0]).toBe(first(seen[0]).split('<page>')[0]);
+  });
+
   it('extend mode: every request is a strict extension of the previous one', async () => {
     const host = fakeHost();
     const replies = [

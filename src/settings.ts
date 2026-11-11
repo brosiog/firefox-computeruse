@@ -44,6 +44,10 @@ export interface Settings {
   vaultAgents: boolean;
   /** Opt-in: the agent gets a web_search tool (Parallel's keyless Search MCP). The search words leave the browser. */
   webSearch: boolean;
+  /** Saved conversations are deleted this long after their last message: 'forever' or a number of days. */
+  keepChats: string;
+  /** Things to remember: plain sentences, one per line; "site.com: …" lines apply only on that site (see memory.ts). */
+  notes: string;
   /** Benchmarks only: replaces the built-in system prompt. Not shown in the UI. */
   systemOverride?: string;
 }
@@ -100,6 +104,8 @@ export const DEFAULTS: Settings = {
   vaultAsk: true,
   vaultAgents: false,
   webSearch: false,
+  keepChats: 'forever',
+  notes: '',
 };
 
 declare const browser: any;
