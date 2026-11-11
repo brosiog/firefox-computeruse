@@ -4,6 +4,7 @@
 //   pnpm e2e:login                 all cases
 //   pnpm e2e:login std- fr-        cases whose id starts with any of these
 import { spawn, execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { resolve } from 'node:path';
@@ -20,6 +21,9 @@ if (!existsSync(ff)) {
 }
 const PORT = 8795;
 const BW_PORT = 8796;
+const BRIDGE_PORT = process.env.FCU_BRIDGE_PORT ?? '47823';
+// A pairing token for this run only: fcu.mjs gets it from the environment, the panel from /e2e/settings.
+const BRIDGE_TOKEN = randomBytes(32).toString('base64url');
 const base = `http://${HOST}:${PORT}`;
 const only = process.argv.slice(2);
 const cases = CASES.filter(c => !only.length || only.some(p => c.id.startsWith(p)));
@@ -48,7 +52,10 @@ const web = http.createServer(async (req, res) => {
   const u = new URL(req.url, `http://${req.headers.host}`);
   const html = (h, code = 200) => (res.writeHead(code, { 'content-type': 'text/html; charset=utf-8' }), res.end(h));
   const p = u.pathname;
-  if (p === '/e2e/settings') return (res.writeHead(200, { 'content-type': 'application/json' }), res.end(JSON.stringify({ vault: true, vaultUrl: `http://localhost:${BW_PORT}`, vaultAsk: true, vaultAgents: true })));
+  if (p === '/e2e/settings') {
+    const s = { bridgeUrl: `http://127.0.0.1:${BRIDGE_PORT}`, bridgeToken: BRIDGE_TOKEN, vault: true, vaultUrl: `http://localhost:${BW_PORT}`, vaultAsk: true, vaultAgents: true };
+    return (res.writeHead(200, { 'content-type': 'application/json' }), res.end(JSON.stringify(s)));
+  }
   if (p === '/e2e/approve') {
     st.gates.push(u.searchParams.get('risk'));
     st.gateWhat.push(u.searchParams.get('what') ?? '');
@@ -101,7 +108,7 @@ await new Promise(r => bwSrv.listen(BW_PORT, '127.0.0.1', r));
 // ---------- extension + Firefox + MCP ----------
 execSync('pnpm exec wxt build -b firefox', { cwd: root, stdio: 'ignore', env: { ...process.env, WXT_BRIDGE_TEST: base } });
 const script = resolve(root, 'bridge/fcu.mjs');
-const env = { ...process.env, FCU_BRIDGE_PORT: process.env.FCU_BRIDGE_PORT ?? '47823' };
+const env = { ...process.env, FCU_BRIDGE_PORT: BRIDGE_PORT, FCU_BRIDGE_TOKEN: BRIDGE_TOKEN };
 const mcpProc = spawn(process.execPath, [script], { env, stdio: ['pipe', 'pipe', 'inherit'] });
 const pending = new Map();
 let buf = '';

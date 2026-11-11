@@ -32,8 +32,12 @@ export interface Settings {
   history: 'extend' | 'compact';
   /** Tokens of history (extend mode) before old page states are dropped. */
   historyBudget: number;
-  /** Agent bridge hub (bridge/fcu.mjs) the sidebar connects to, so coding agents can use the browser. Empty: off. */
+  /** Agent bridge hub (bridge/fcu.mjs) the sidebar connects to, so coding agents can drive this browser (with the
+   *  user's sign-ins). Off by default: it connects only when this and `bridgeToken` are both set. */
   bridgeUrl: string;
+  /** Pairing token from `node bridge/fcu.mjs token`. Other local processes can reach a loopback port; without the token
+   *  they can neither call the hub nor pose as it (the sidebar runs only commands signed with it). */
+  bridgeToken: string;
   /** Opt-in: the agent may sign in with Bitwarden logins (through `bw serve`), without ever seeing them. */
   vault: boolean;
   /** The Bitwarden CLI's local API (`bw serve`). */
@@ -98,7 +102,10 @@ export const DEFAULTS: Settings = {
   keepAlive: '30m',
   history: 'extend',
   historyBudget: 16000,
-  bridgeUrl: 'http://127.0.0.1:47823',
+  // Off until the user pairs a hub (URL + token). Installs that saved the old on-by-default URL have no token, so
+  // they stay disconnected until the token is entered.
+  bridgeUrl: '',
+  bridgeToken: '',
   vault: false,
   vaultUrl: 'http://localhost:8087',
   vaultAsk: true,

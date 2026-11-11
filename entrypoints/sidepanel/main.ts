@@ -726,7 +726,24 @@ function fill(s: Settings) {
   presetSel.value = match?.[0] ?? '';
   $('presetHint').textContent = match?.[1].hint ?? '';
   syncKind();
+  syncBridgeHint();
 }
+
+// Agent bridge: off unless both the URL and the pairing token are set; say what is missing.
+const bridgeUrlIn = form.elements.namedItem('bridgeUrl') as HTMLInputElement;
+const bridgeTokenIn = form.elements.namedItem('bridgeToken') as HTMLInputElement;
+function syncBridgeHint() {
+  const url = bridgeUrlIn.value.trim();
+  const tok = bridgeTokenIn.value.trim();
+  const hint = $('bridgeHint');
+  hint.classList.toggle('err', !!url && !tok);
+  const cmd = el('code', undefined, 'node bridge/fcu.mjs token');
+  if (!url) hint.replaceChildren('Off. To pair a coding agent, enter the hub URL and the token that ', cmd, ' prints.');
+  else if (!tok) hint.replaceChildren('Needs a pairing token: run ', cmd, ' and paste its output here. Until then the bridge stays off.');
+  else hint.replaceChildren('The sidebar runs only commands signed with this token.');
+}
+bridgeUrlIn.addEventListener('input', syncBridgeHint);
+bridgeTokenIn.addEventListener('input', syncBridgeHint);
 
 // ChatGPT plan: sign-in box instead of a server URL and key.
 const kindSel = form.elements.namedItem('kind') as HTMLSelectElement;
@@ -883,6 +900,31 @@ $('gear').onclick = openSettings;
 statusBtn.onclick = openSettings;
 $('fullauto').onclick = openSettings;
 
+// Web search sends search words to Parallel: its data-collection category (searchTerms) is optional in the manifest
+// and asked for when the box is ticked (a user gesture). Firefox before 140 has no data-collection consent and throws
+// or ignores the key: the setting alone decides there.
+const SEARCH_CONSENT = { permissions: [], origins: [], data_collection: ['searchTerms'] };
+const webSearchBox = form.elements.namedItem('webSearch') as HTMLInputElement;
+webSearchBox.addEventListener('change', async () => {
+  if (!webSearchBox.checked) return;
+  try {
+    if (!(await browser.permissions.request(SEARCH_CONSENT))) webSearchBox.checked = false;
+  } catch {
+    // no data-collection consent in this Firefox
+  }
+});
+/** Turns web search off if the user withdrew its data-collection consent (about:addons → Permissions). */
+async function checkSearchConsent() {
+  if (!settings.webSearch) return;
+  try {
+    if (await browser.permissions.contains(SEARCH_CONSENT)) return;
+  } catch {
+    return;
+  }
+  settings = { ...settings, webSearch: false };
+  await saveSettings(settings);
+}
+
 dlg.addEventListener('close', async () => {
   vaultPw.value = '';
   if (dlg.returnValue !== 'save') return;
@@ -905,15 +947,21 @@ const bridgeHandle = createBridgeHandler({
   vault: () => vaultFor(true),
   note: (text, ok) => add(el('div', `note${ok ? '' : ' err'}`, text)),
 });
-let bridge: { url: string; stop: () => void } | null = null;
+let bridge: { key: string; stop: () => void } | null = null;
 function connectBridge() {
   // e2e:bridge builds: Firefox also opens the real sidebar at install; only the panel tab under test may take agent
   // commands, or the hub would split them between two panels.
   const testSidebar = !!import.meta.env.WXT_BRIDGE_TEST && !new URLSearchParams(location.search).get('tabUrl');
   const url = e2eUrl || testSidebar ? '' : settings.bridgeUrl.trim();
-  if (bridge?.url === url) return;
+  // Both are needed: a URL without the pairing token (e.g. saved by an older version, when the bridge was on by
+  // default) does not connect.
+  const token = settings.bridgeToken.trim();
+  const key = url && token ? `${url}\n${token}` : '';
+  if ((bridge?.key ?? '') === key) return;
   bridge?.stop();
-  bridge = url ? { url, stop: startBridge(url, bridgeHandle, up => ($('agents').hidden = !up)) } : null;
+  bridge = key
+    ? { key, stop: startBridge(url, token, bridgeHandle, up => ($('agents').hidden = !up), text => add(el('div', 'note err', text))) }
+    : null;
 }
 
 async function refreshStatus() {
@@ -956,6 +1004,7 @@ void followTheme(browser);
 
 (async () => {
   settings = await loadSettings();
+  await checkSearchConsent();
   // Old conversations past the retention window are deleted each time the sidebar opens.
   chats = prune(await loadChats(), settings.keepChats);
   void saveChats(chats).catch(() => {});

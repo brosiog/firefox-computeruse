@@ -8,6 +8,11 @@ description: Drive the user's real Firefox (logged-in sessions, open tabs) throu
 Run `node <repo>/bridge/fcu.mjs <command>`. The Firefox Browser Use sidebar must be open in Firefox. Exit code 1 means
 an error; the reason is printed.
 
+The bridge is off until the user pairs it. If a call says "not connected", ask the user to run
+`node <repo>/bridge/fcu.mjs token` and paste its output, with the URL `http://127.0.0.1:47823`, in the sidebar's
+*Settings → Agent bridge*. The token keeps other local processes from using or impersonating the bridge. Don't print
+or copy it anywhere else.
+
 - `fcu.mjs observe` prints the current tab as compact text: the URL, the tabs, and elements with refs such as
   `[12] button "Search"`. Add `--shot /tmp/page.jpg` to save a screenshot with the refs drawn on it.
 - `fcu.mjs act '<json>'` runs one action or a JSON array of actions, then prints the results and the new page state.

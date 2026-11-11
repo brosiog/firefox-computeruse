@@ -62,7 +62,8 @@ function shop(req, res, port, framePort) {
     return res.end(JSON.stringify({ id: 'e2e', startUrl: state.config.tabUrl + '/', ...state.config }));
   }
   if (u.pathname === '/e2e/settings') {
-    // e2e:bridge: settings the panel starts with (Bitwarden on, pointed at the fake bw serve).
+    // e2e:bridge: settings the panel starts with (the bridge paired with the test's hub; Bitwarden on, pointed at the
+    // fake bw serve).
     if (!state.bridgeSettings) {
       res.writeHead(404);
       return res.end();
