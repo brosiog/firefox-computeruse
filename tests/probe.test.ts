@@ -409,3 +409,78 @@ describe('sign-in fields (password manager fills)', () => {
     expect(((await p.run({ op: 'loginForm' })) as any).error).toContain('sign-up or change-password');
   });
 });
+
+describe('refs after a re-render', () => {
+  const list = (items: string[]) => items.map(t => `<li><label><input type="checkbox"> ${t}</label> <button aria-label="Delete ${t}">x</button></li>`).join('');
+
+  it('follows a redrawn control to its replacement, so a chain survives a list that re-renders', async () => {
+    const p = page(`<ul id="l">${list(['Alpha task', 'Beta task'])}</ul>`);
+    const s = await snap(p);
+    const beta = refOf(s.text, 'checkbox "Beta task"');
+    document.getElementById('l')!.innerHTML = list(['Beta task', 'Alpha task']); // re-render, new elements
+    const r = (await p.run({ op: 'click', id: beta })) as ProbeResult;
+    expect(r.ok).toBe(true);
+    const box = [...document.querySelectorAll('input')].find(i => i.parentElement!.textContent!.includes('Beta'))!;
+    expect((box as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('still fails closed when the control is gone or ambiguous', async () => {
+    const p = page(`<ul id="l">${list(['Alpha task', 'Beta task'])}</ul>`);
+    const s = await snap(p);
+    const beta = refOf(s.text, 'checkbox "Beta task"');
+    document.getElementById('l')!.innerHTML = list(['Alpha task']);
+    expect(((await p.run({ op: 'click', id: beta })) as ProbeResult).ok).toBe(false);
+
+    const p2 = page(`<ul id="l">${list(['Gamma task'])}</ul>`);
+    const g = refOf((await snap(p2)).text, 'checkbox "Gamma task"');
+    document.getElementById('l')!.innerHTML = list(['Gamma task', 'Gamma task']);
+    const r = (await p2.run({ op: 'click', id: g })) as ProbeResult;
+    expect(r.ok).toBe(false);
+    expect(document.querySelectorAll('input:checked').length).toBe(0);
+  });
+});
+
+describe('custom listbox', () => {
+  it('says what the opener shows after an option is picked', async () => {
+    const p = page(`<span><button type="button" aria-haspopup="listbox" aria-label="Plan" id="pb">Choose a plan</button>
+      <ul role="listbox" id="pl"><li role="option" aria-selected="false">Starter</li><li role="option" aria-selected="false">Scale</li></ul></span>`);
+    const pb = document.getElementById('pb')!;
+    document.querySelectorAll('[role=option]').forEach(li => ((li as HTMLElement).onclick = () => { pb.textContent = li.textContent; li.setAttribute('aria-selected', 'true'); }));
+    const s = await snap(p);
+    const r = (await p.run({ op: 'click', id: refOf(s.text, 'option "Scale"') })) as ProbeResult;
+    expect(r.ok && r.msg).toMatch(/clicked li "Scale", now selected; button "Plan" now shows "Scale"/);
+  });
+});
+
+describe('offsite links', () => {
+  it('holds a link to another site, not one on the same site', async () => {
+    const p = page(`<a href="https://elsewhere.example/verify">this link</a> <a href="/next">Next page</a>`);
+    const s = await snap(p);
+    const off = (await p.run({ op: 'click', id: refOf(s.text, 'this link') })) as ProbeResult;
+    expect(off.ok).toBe(false);
+    expect((off as any).gate).toMatchObject({ risk: 'offsite', host: 'elsewhere.example' });
+    const same = (await p.run({ op: 'click', id: refOf(s.text, 'Next page'), gate: ['offsite'] })) as ProbeResult;
+    expect(same.ok).toBe(true);
+  });
+});
+
+describe('custom-styled toggles', () => {
+  it('lists a see-through checkbox whose sibling label is visible, named by that label', async () => {
+    const p = page(`<ul><li><input type="checkbox" style="opacity:0"><label>Water the plants</label></li>
+      <li><input type="checkbox" style="opacity:0"></li></ul>`);
+    const s = await snap(p);
+    expect(s.text).toMatch(/\[\d+\] checkbox "Water the plants" unchecked/);
+    expect(s.text.match(/checkbox/g)?.length).toBe(1);
+    const r = (await p.run({ op: 'click', id: refOf(s.text, 'checkbox "Water the plants"') })) as ProbeResult;
+    expect(r.ok && r.msg).toMatch(/now checked/);
+  });
+});
+
+describe('modal detection', () => {
+  it('ignores a dialog marked modal that is not on screen', async () => {
+    const p = page(`<div style="display:none"><div role="dialog" aria-modal="true" aria-label="Details">List price info</div></div><button>Add to list</button>`);
+    const s = await snap(p);
+    expect(s.text).not.toMatch(/Modal dialog open/);
+    expect(s.text).toMatch(/button "Add to list"/);
+  });
+});

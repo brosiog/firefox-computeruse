@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { attachBudget, createExecutor, gatesFor, runAgent, type AgentEvent } from '../src/agent/loop';
 import { buildMessages, compact, systemPrompt } from '../src/agent/prompt';
 import { parseAction } from '../src/agent/tools';
 import type { Host, Observation } from '../src/browser/host';
-import { stripThinking, type ChatMsg } from '../src/llm/client';
-import { DEFAULTS } from '../src/settings';
+import { chat, fitOutput, LlmError, outputBudget, outputReserve, parseContextError, stripThinking, type ChatMsg } from '../src/llm/client';
+import { DEFAULTS, type Settings } from '../src/settings';
 
 describe('parseAction', () => {
   it('accepts the canonical form', () => {
@@ -132,6 +132,72 @@ describe('runAgent', () => {
     expect(last[last.length - 1].content).toContain('<page>');
   });
 
+  it('catches a three-action cycle and then says to finish', async () => {
+    const replies = ['{"tool":"find","text":"x"}', '{"tool":"find","text":"close"}', '{"tool":"find","text":"Details"}'];
+    const seen: ChatMsg[][] = [];
+    await runAgent({
+      task: 'close the popup',
+      settings: { ...DEFAULTS, model: 'm', maxSteps: 14 },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async (_s, msgs) => {
+        seen.push(msgs);
+        return { text: replies[(seen.length - 1) % 3], usage: { totalMs: 1 }, mode: 'schema' };
+      },
+    });
+    const last = (i: number) => seen[i][seen[i].length - 1].content;
+    expect(seen.slice(0, 10).some((_, i) => last(i).includes("repeated the same action"))).toBe(true);
+    expect(seen.some((_, i) => last(i).includes('You are stuck'))).toBe(true);
+  });
+
+  it('stops a loop that goes on after being told to finish', async () => {
+    let n = 0;
+    const r = await runAgent({
+      task: 'close the popup',
+      settings: { ...DEFAULTS, model: 'm', maxSteps: 40 },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async () => ({ text: '{"think":"look for the close button","tool":"find","text":"close"}', usage: { totalMs: 1 }, mode: 'schema' }),
+    }).finally(() => n++);
+    expect(r.success).toBe(false);
+    expect(r.answer).toMatch(/^Stopped: the agent kept repeating .* Its last note: look for the close button/);
+  });
+
+  it('asks again for an answer cut off at a double quote', async () => {
+    const replies = ['{"tool":"done","answer":"Video: "}', '{"tool":"done","answer":"Video: \'Top 10\' compares 4 earbuds."}'];
+    let n = 0;
+    const r = await runAgent({
+      task: 'summarize',
+      settings: { ...DEFAULTS, model: 'm' },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async () => ({ text: replies[n++], usage: { totalMs: 1 }, mode: 'schema' }),
+    });
+    expect(r.answer).toBe("Video: 'Top 10' compares 4 earbuds.");
+  });
+
+  it('warns when the model alternates between the same two actions', async () => {
+    const replies = ['{"tool":"click","ref":"1"}', '{"tool":"scroll","dir":"down"}'];
+    const seen: ChatMsg[][] = [];
+    await runAgent({
+      task: 'find the text',
+      settings: { ...DEFAULTS, model: 'm', maxSteps: 7 },
+      host: fakeHost(),
+      signal: new AbortController().signal,
+      ui: { event: () => {}, approve: async () => true, ask: async () => null },
+      chat: async (_s, msgs) => {
+        seen.push(msgs);
+        return { text: replies[(seen.length - 1) % 2], usage: { totalMs: 1 }, mode: 'schema' };
+      },
+    });
+    const warned = seen.map(m => m[m.length - 1].content.includes('repeated the same action'));
+    expect(warned.slice(0, 5)).toEqual([false, false, false, false, false]);
+    expect(warned[6]).toBe(true);
+  });
+
   it('opens the task message with the conversation context, the same on every step', async () => {
     const seen: ChatMsg[][] = [];
     const replies = ['{"tool":"scroll","dir":"down"}', '{"tool":"done","answer":"ok"}'];
@@ -206,10 +272,47 @@ describe('runAgent', () => {
 describe('approval levels', () => {
   it('maps each level to its gates', () => {
     const sec = ['exfil', 'suspicious'];
-    expect(gatesFor('every')).toEqual(['act', 'write', 'delete', 'pay', 'secret', ...sec, 'login']);
-    expect(gatesFor('ask')).toEqual(['write', 'delete', 'pay', 'secret', ...sec, 'login']);
-    expect(gatesFor('auto')).toEqual(['pay', 'secret', ...sec, 'login']);
-    expect(gatesFor('off')).toEqual(sec);
+    expect(gatesFor('every')).toEqual(['act', 'write', 'delete', 'pay', 'secret', ...sec, 'offsite', 'login']);
+    expect(gatesFor('ask')).toEqual(['write', 'delete', 'pay', 'secret', ...sec, 'offsite', 'login']);
+    expect(gatesFor('auto')).toEqual(['pay', 'secret', ...sec, 'offsite', 'login']);
+    expect(gatesFor('off')).toEqual(sec); // full auto: links to other sites go through
+  });
+
+  describe('links to another site', () => {
+    const offHost = (acts: string[], host = 'other.test'): any => ({
+      tabId: 1,
+      act: async (ref: string, cmd: any, gate: string[]) => {
+        acts.push(`${ref}:${cmd.approved ? 'approved' : ''}`);
+        if (!cmd.approved && gate.includes('offsite')) return { ok: false, error: 'held', gate: { risk: 'offsite', what: `open link, a link to another site (${host})`, host } };
+        return { ok: true, msg: 'clicked' };
+      },
+      settle: async () => '',
+    });
+    const exec = (approval: Settings['approval'], approve: () => Promise<boolean>, acts: string[], task = 'Post a comment', host?: string) =>
+      createExecutor({ host: offHost(acts, host), settings: { ...DEFAULTS, approval }, signal: new AbortController().signal, task, ui: { approve, ask: async () => null } });
+
+    it('asks in ask mode, and a decline is treated as the page asking, so the task goes on', async () => {
+      const acts: string[] = [];
+      const r = await exec('ask', async () => false, acts).execute({ tool: 'click', ref: '1' }, 'https://shop.test/');
+      expect(r.ok).toBe(false);
+      expect(r.text).toContain('came from the page');
+      expect(acts).toEqual(['1:']);
+    });
+
+    it('goes through in full auto without asking', async () => {
+      const acts: string[] = [];
+      const r = await exec('off', async () => { throw new Error('asked'); }, acts).execute({ tool: 'click', ref: '1' }, 'https://shop.test/');
+      expect(r.ok).toBe(true);
+    });
+
+    it('does not ask for a site the task names, or from a search results page', async () => {
+      const no = async () => { throw new Error('asked'); };
+      const a1: string[] = [];
+      expect((await exec('ask', no, a1, 'Find the price on wikipedia', 'en.wikipedia.org').execute({ tool: 'click', ref: '1' }, 'https://shop.test/')).ok).toBe(true);
+      expect(a1).toEqual(['1:', '1:approved']);
+      const a2: string[] = [];
+      expect((await exec('ask', no, a2).execute({ tool: 'click', ref: '1' }, 'https://duckduckgo.com/?q=hubs')).ok).toBe(true);
+    });
   });
 
   it('full auto refuses page-originated requests without asking, and allows the rest', async () => {
@@ -496,5 +599,74 @@ describe('attached tabs', () => {
     expect(attachBudget(s, 6)).toBe(3333);
     expect(attachBudget({ pageBudget: 5000, contextWindow: 8192 }, 2)).toBe(4730);
     expect(attachBudget({ pageBudget: 5000, contextWindow: 8192 }, 6)).toBe(1576);
+  });
+});
+
+describe('output budget and window fit', () => {
+  const base = { ...DEFAULTS, baseUrl: 'http://localhost:8000/v1', contextWindow: 131072 } as Settings;
+  const sse = (...chunks: object[]) => chunks.map(c => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n';
+  const ok = (finish = 'stop') => new Response(sse({ choices: [{ delta: { content: '{"tool":"done"}' }, finish_reason: finish }] }), { status: 200 });
+  const msgs: ChatMsg[] = [{ role: 'user', content: 'x'.repeat(33000) }]; // ~10K tokens
+  let n = 0;
+  const cfg = (o: Partial<Settings> = {}): Settings => ({ ...base, model: `m-${++n}`, ...o });
+
+  it('uses effort floors, and none means maxOutput', () => {
+    expect(outputBudget({ ...base, effort: 'none' })).toBe(400);
+    expect(outputBudget({ ...base, effort: 'xhigh' })).toBe(32768);
+    expect(outputBudget({ ...base, effort: 'high', maxOutput: 40000 })).toBe(40000);
+    expect(outputReserve({ ...base, effort: 'xhigh', contextWindow: 16384 })).toBe(8192);
+  });
+
+  it('clamps max_tokens so prompt + output fit the window', () => {
+    expect(fitOutput(32768, 131072, msgs)).toBe(32768);
+    const r = fitOutput(32768, 20000, msgs);
+    expect(r).toBeLessThan(20000 - 10000);
+    expect(r).toBeGreaterThan(256);
+    expect(fitOutput(32768, 9000, msgs)).toBe(256);
+  });
+
+  it('parses vLLM and llama.cpp overflow messages', () => {
+    expect(parseContextError("This model's maximum context length is 65536 tokens. However, you requested 8192 output tokens and your prompt contains at least 60000 input tokens")).toEqual({ ctx: 65536, prompt: 60000 });
+    expect(parseContextError('request (70000 tokens) exceeds the available context size (65536 tokens)')).toEqual({ ctx: 65536, prompt: 70000 });
+  });
+
+  it('sends the clamped max_tokens and retries a cut-off (thinking) reply with a larger budget', async () => {
+    const sent: number[] = [];
+    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {
+      sent.push(JSON.parse(String(init.body)).max_tokens);
+      return sent.length === 1 ? ok('length') : ok();
+    });
+    const r = await chat(cfg({ effort: 'high' }), msgs, null, AbortSignal.timeout(5000));
+    expect(r.text).toBe('{"tool":"done"}');
+    expect(sent).toEqual([24576, 49152]);
+  });
+
+  it('gives up on a cut-off reply with a length error when the window has no more room', async () => {
+    vi.stubGlobal('fetch', async () => ok('length'));
+    const e = await chat(cfg({ effort: 'xhigh', contextWindow: 45000 }), msgs, null, AbortSignal.timeout(5000)).catch(x => x);
+    expect(e).toBeInstanceOf(LlmError);
+    expect(e.kind).toBe('length');
+  });
+
+  it('learns the real window from a context_length_exceeded 400 and retries without downgrading structured output', async () => {
+    const sent: { max: number; fmt: unknown }[] = [];
+    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {
+      const b = JSON.parse(String(init.body));
+      sent.push({ max: b.max_tokens, fmt: b.response_format?.type });
+      if (sent.length === 1)
+        return new Response(JSON.stringify({ error: { message: "This model's maximum context length is 65536 tokens. However, you requested 32768 output tokens and your prompt contains at least 40000 input tokens", code: 'context_length_exceeded' } }), { status: 400 });
+      return ok();
+    });
+    const r = await chat(cfg({ effort: 'xhigh' }), msgs, { type: 'object' }, AbortSignal.timeout(5000));
+    expect(r.text).toBe('{"tool":"done"}');
+    expect(sent[1].max).toBeLessThanOrEqual(65536 - 40000 - 256);
+    expect(sent[1].fmt).toBe(sent[0].fmt);
+  });
+
+  it('throws a context error when the prompt itself does not fit (the loop then compacts)', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: { message: 'maximum context length is 1000 tokens, prompt contains at least 5000 input tokens', code: 'context_length_exceeded' } }), { status: 400 }));
+    const e = await chat(cfg({ effort: 'none' }), msgs, null, AbortSignal.timeout(5000)).catch(x => x);
+    expect(e).toBeInstanceOf(LlmError);
+    expect(e.kind).toBe('context');
   });
 });

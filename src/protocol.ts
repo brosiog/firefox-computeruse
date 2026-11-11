@@ -24,7 +24,7 @@ export type ProbeCmd =
  *  that changes the page or the tabs (a plain click, typing, navigating); it is gated only when every action asks. */
 /** exfil: sending a form to another site than the page's; suspicious: acting on page text aimed at the agent;
  *  login: filling a saved password-manager login. */
-export type Risk = 'read' | 'act' | 'write' | 'delete' | 'pay' | 'secret' | 'exfil' | 'suspicious' | 'login';
+export type Risk = 'read' | 'act' | 'write' | 'delete' | 'pay' | 'secret' | 'exfil' | 'suspicious' | 'offsite' | 'login';
 
 export interface Gate {
   risk: Risk;
@@ -32,6 +32,8 @@ export interface Gate {
   what: string;
   /** Something the user should notice before allowing it (shown highlighted on the card). */
   warn?: string;
+  /** offsite: the other site's host, so the executor can allow a site the user's task names. */
+  host?: string;
 }
 
 export interface ProbeOk {

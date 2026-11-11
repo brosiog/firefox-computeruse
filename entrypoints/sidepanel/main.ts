@@ -171,7 +171,7 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
     if (e2eUrl) {
       // Test build: answer automatically (the job says how), counting it so the test can check the gate fired.
       // A careful user declines what the security gates flag; everything else follows the job's setting.
-      if (gate.risk === 'exfil' || gate.risk === 'suspicious') {
+      if (gate.risk === 'exfil' || gate.risk === 'suspicious' || gate.risk === 'offsite') {
         e2eSecurityDeclines++;
         setTimeout(() => resolve(false), 100);
         return;
@@ -191,6 +191,7 @@ function approve(gate: Gate, a: Action): Promise<boolean> {
       secret: 'type into a password or payment field',
       exfil: 'send a form to a different website',
       suspicious: 'act on page text that addresses AI agents (possible prompt injection)',
+      offsite: 'open a link to another site',
       login: 'sign in with your Bitwarden login',
     };
     const want = label[gate.risk];

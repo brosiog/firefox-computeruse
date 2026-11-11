@@ -5,7 +5,7 @@
 // Output is constrained to the action schema where the server supports it, falling back step by step
 // (schema → json → off) and remembering what worked per server and model.
 
-import type { Settings, Structured } from '../settings';
+import type { Effort, Settings, Structured } from '../settings';
 import { RESOURCE, askBackground } from './chatgpt-auth';
 
 /** Where ChatGPT access tokens come from. The sidebar asks the background page; tests swap in a stub. */
@@ -41,6 +41,10 @@ export class LlmError extends Error {
   constructor(
     message: string,
     readonly status = 0,
+    /** context: the prompt (plus the output reserve) does not fit the window; length: the output budget ran out
+     *  (usually while thinking) before the answer was complete; loop: the model's thinking went in circles and was cut
+     *  short. All are recoverable by the caller. */
+    readonly kind?: 'context' | 'length' | 'loop',
   ) {
     super(message);
   }
@@ -48,7 +52,7 @@ export class LlmError extends Error {
 
 type Level = 'schema' | 'json' | 'off';
 const LADDER: Level[] = ['schema', 'json', 'off'];
-const learned = new Map<string, { level: Level; noThinkOk: boolean; extrasOk: boolean }>();
+const learned = new Map<string, { level: Level; noThinkOk: boolean; extrasOk: boolean; ctx?: number }>();
 
 export function isLocalUrl(u: string): boolean {
   try {
@@ -62,8 +66,41 @@ export function isLocalUrl(u: string): boolean {
   }
 }
 
-/** Thinking tokens count against the output limit, so a thinking model needs far more room than the action itself. */
-export const outputBudget = (s: Settings) => (s.effort === 'none' ? s.maxOutput : Math.max(s.maxOutput, s.effort === 'low' ? 2048 : 8192));
+/** Thinking tokens count against the output limit, so a thinking model needs far more room than the action itself.
+ *  Floors per effort; they assume a large window (128K) and are clamped to what actually fits by `fitOutput`. */
+const THINK_FLOOR: Record<Exclude<Effort, 'none'>, number> = { low: 4096, medium: 16384, high: 24576, xhigh: 32768, default: 16384 };
+export const outputBudget = (s: Settings) => (s.effort === 'none' ? s.maxOutput : Math.max(s.maxOutput, THINK_FLOOR[s.effort]));
+
+/** The part of the window kept free for output: the budget, but never more than half the window, so a small window
+ *  still has room for a prompt. The agent loop reserves exactly this. */
+export const outputReserve = (s: Settings) => Math.min(outputBudget(s), Math.floor(s.contextWindow / 2));
+
+/** ~3.3 chars per token plus 800 per image: a deliberately rough count, padded where it is used. */
+export const estimateTokens = (msgs: ChatMsg[]) =>
+  Math.ceil(msgs.reduce((n, m) => n + m.content.length + 12, 0) / 3.3) + msgs.reduce((n, m) => n + (m.images?.length ?? 0) * 800, 0);
+
+const MARGIN = 256;
+
+/** max_tokens that fits: never more than the window minus the (padded) prompt minus a margin, so prompt + output
+ *  cannot exceed the window. At least min(256, want) so a nearly full prompt still gets a request the server can judge. */
+export function fitOutput(want: number, ctx: number, msgs: ChatMsg[], knownPrompt = 0): number {
+  const prompt = Math.max(knownPrompt, Math.ceil(estimateTokens(msgs) * 1.1));
+  return Math.max(Math.min(want, ctx - prompt - MARGIN), Math.min(256, want));
+}
+
+const CTX_RE = /context[_ ]length|context[_ ]window|context size|maximum context|too many (input )?tokens|exceed(s|ed)? (the )?(model|available|max)/i;
+
+/** Window and prompt size out of a vLLM / llama.cpp / OpenAI "too long" message, when it states them. */
+export function parseContextError(msg: string): { ctx?: number; prompt?: number } {
+  const num = (re: RegExp) => {
+    const m = re.exec(msg);
+    return m ? Number(m[1] ?? m[2]) : undefined;
+  };
+  return {
+    ctx: num(/maximum context length is (\d+)|context size \((\d+)/i),
+    prompt: num(/prompt contains at least (\d+)|request \((\d+) tokens/i) ?? num(/(\d+) input tokens|resulted in (\d+) tokens/i),
+  };
+}
 
 const trimSlash = (u: string) => u.replace(/\/+$/, '');
 
@@ -103,6 +140,17 @@ async function* lines(body: ReadableStream<Uint8Array>, signal: AbortSignal): As
 
 /** Grammar-constrained decoding can collapse into endless whitespace inside the JSON: throws so the caller stops early
  *  and falls back. */
+/** Thinking that repeats itself: the short-period patterns above, or the last 160 characters already seen twice
+ *  before (a paragraph-long loop). At ~19 tok/s a 32K budget is half an hour, so a loop is stopped, not waited out. */
+export function thinkingLoops(r: string): boolean {
+  if (/\s{200}$/.test(r) || /(.{1,8})\1{60}$/s.test(r)) return true;
+  if (r.length < 2000) return false;
+  const tail = r.slice(-160);
+  let n = 0;
+  for (let i = r.indexOf(tail); i >= 0 && i < r.length - 160; i = r.indexOf(tail, i + 1)) if (++n >= 2) return true;
+  return false;
+}
+
 function checkDegenerate(text: string): void {
   if (/\s{48}$/.test(text) || /(.{1,8})\1{30}$/s.test(text)) throw new LlmError('model output degenerated (repeating whitespace)', 422);
 }
@@ -113,6 +161,9 @@ export async function chat(
   schema: object | null,
   signal: AbortSignal,
   onText?: (full: string) => void,
+  /** cutoffOk: a reply cut off by the output limit is expected (prewarm asks for one token) and is returned as is.
+   *  onThinking: progress of the model's separate thinking stream, in approximate tokens. */
+  opts: { cutoffOk?: boolean; onThinking?: (tokens: number) => void } = {},
 ): Promise<ChatResult> {
   const key = `${s.kind}|${trimSlash(s.baseUrl)}|${s.model}`;
   const prior = learned.get(key);
@@ -123,22 +174,63 @@ export async function chat(
       noThinkOk: true,
       extrasOk: true,
     }),
+    maxOut: 0,
+    promptFloor: 0,
   };
   if (!schema) state.level = 'off';
-  for (let attempt = 0; attempt < 5; attempt++) {
+  let outMult = 1;
+  let ctxTries = 0;
+  let reasoning = '';
+  let checked = 0;
+  const onThink = (d: string) => {
+    reasoning += d;
+    if (reasoning.length - checked < 400) return;
+    checked = reasoning.length;
+    opts.onThinking?.(Math.round(reasoning.length / 3.3));
+    if (thinkingLoops(reasoning)) throw new LlmError(`the model's thinking went in circles (${Math.round(reasoning.length / 3.3)} tokens); cut short`, 0, 'loop');
+  };
+  for (let attempt = 0; attempt < 8; attempt++) {
+    reasoning = '';
+    checked = 0;
+    // Output never exceeds what the window leaves after the prompt (the server's window, if it told us a smaller one).
+    const ctx = Math.min(s.contextWindow, state.ctx ?? Infinity);
+    state.maxOut = fitOutput(Math.floor(outputBudget(s) * outMult), ctx, msgs, state.promptFloor);
     try {
       const r =
         s.kind === 'ollama'
-          ? await ollama(s, msgs, schema, state, signal, onText)
+          ? await ollama(s, msgs, schema, state, signal, onText, onThink)
           : s.kind === 'chatgpt'
             ? await responses(s, msgs, schema, state, signal, onText)
-            : await openai(s, msgs, schema, state, signal, onText);
+            : await openai(s, msgs, schema, state, signal, onText, onThink);
       if (schema) learned.set(key, state);
       return r;
     } catch (e) {
       if (signal.aborted) throw e;
       const err = e as LlmError;
       const msg = (err.message || '').toLowerCase();
+      // Output budget used up (usually thinking): ask again with double, as far as the window allows; then the caller
+      // decides. No feature downgrade fixes this.
+      if (err.kind === 'length' && opts.cutoffOk) return { text: '', usage: { totalMs: 0 }, mode: state.level };
+      if (err.kind === 'length') {
+        const more = fitOutput(state.maxOut * 2, ctx, msgs, state.promptFloor);
+        if (more > state.maxOut) {
+          outMult = more / outputBudget(s);
+          continue;
+        }
+        throw err;
+      }
+      // Window overflow: learn the real window and prompt size and retry with less output once; if it still does not
+      // fit, the prompt itself is too big: hand the caller a recoverable error so it compacts.
+      if ((err.status === 400 || err.status === 422) && CTX_RE.test(msg)) {
+        const info = parseContextError(err.message || '');
+        if (info.ctx && info.ctx < ctx) state.ctx = info.ctx;
+        if (info.prompt) state.promptFloor = info.prompt;
+        if (ctxTries++ === 0 && state.maxOut > 256) {
+          outMult = Math.min(outMult, (info.prompt ? 1 : 0.5) * (state.maxOut / outputBudget(s)));
+          continue;
+        }
+        throw new LlmError(`the prompt does not fit the model's context window (${err.message.slice(0, 200)})`, err.status, 'context');
+      }
       if (err.status !== 400 && err.status !== 422 && err.status !== 500) throw e;
       // Learn and retry with fewer features.
       if (state.noThinkOk && s.effort !== 'default' && /think|reasoning|chat_template_kwargs|enable_thinking|effort/.test(msg)) {
@@ -196,9 +288,10 @@ async function ollama(
   s: Settings,
   msgs: ChatMsg[],
   schema: object | null,
-  st: { level: Level; noThinkOk: boolean },
+  st: { level: Level; noThinkOk: boolean; maxOut: number },
   signal: AbortSignal,
   onText?: (t: string) => void,
+  onThink?: (d: string) => void,
 ): Promise<ChatResult> {
   const t0 = performance.now();
   const body: Record<string, unknown> = {
@@ -206,13 +299,14 @@ async function ollama(
     messages: msgs.map(m => (m.images?.length ? { role: m.role, content: m.content, images: m.images } : { role: m.role, content: m.content })),
     stream: true,
     keep_alive: s.keepAlive || '30m',
-    options: { num_ctx: s.contextWindow, temperature: s.temperature, num_predict: outputBudget(s) },
+    options: { num_ctx: s.contextWindow, temperature: s.temperature, num_predict: st.maxOut },
   };
   if (st.level === 'schema' && schema) body.format = schema;
   else if (st.level === 'json') body.format = 'json';
   if (s.effort !== 'default' && st.noThinkOk) body.think = s.effort === 'none' ? false : s.effort === 'low' || s.effort === 'medium' || s.effort === 'high' ? s.effort : true;
   const res = await post(`${trimSlash(s.baseUrl)}/api/chat`, body, s, signal);
   let text = '';
+  let truncated = false;
   const usage: Usage = { totalMs: 0 };
   for await (const line of lines(res.body!, signal)) {
     let j: any;
@@ -222,6 +316,7 @@ async function ollama(
       continue;
     }
     if (j.error) throw new LlmError(`model error: ${j.error}`, 500);
+    if (j.message?.thinking) onThink?.(j.message.thinking);
     const c = j.message?.content;
     if (c) {
       text += c;
@@ -229,6 +324,7 @@ async function ollama(
       checkDegenerate(text);
     }
     if (j.done) {
+      if (j.done_reason === 'length') truncated = true;
       usage.promptTokens = j.prompt_eval_count;
       usage.outputTokens = j.eval_count;
       usage.promptMs = j.prompt_eval_duration ? j.prompt_eval_duration / 1e6 : undefined;
@@ -237,6 +333,7 @@ async function ollama(
     }
   }
   usage.totalMs = performance.now() - t0;
+  if (truncated) throw new LlmError(`the model ran out of output budget (${st.maxOut} tokens) before it finished answering`, 0, 'length');
   return { text: stripThinking(text), usage, mode: st.level };
 }
 
@@ -244,9 +341,10 @@ async function openai(
   s: Settings,
   msgs: ChatMsg[],
   schema: object | null,
-  st: { level: Level; noThinkOk: boolean; extrasOk: boolean },
+  st: { level: Level; noThinkOk: boolean; extrasOk: boolean; maxOut: number },
   signal: AbortSignal,
   onText?: (t: string) => void,
+  onThink?: (d: string) => void,
 ): Promise<ChatResult> {
   const t0 = performance.now();
   const local = isLocalUrl(s.baseUrl);
@@ -265,7 +363,7 @@ async function openai(
     ),
     stream: true,
     temperature: s.temperature,
-    max_tokens: outputBudget(s),
+    max_tokens: st.maxOut,
   };
   if (st.level === 'schema' && schema) body.response_format = { type: 'json_schema', json_schema: { name: 'action', strict: false, schema } };
   else if (st.level === 'json') body.response_format = { type: 'json_object' };
@@ -281,6 +379,7 @@ async function openai(
   }
   const res = await post(`${trimSlash(s.baseUrl)}/chat/completions`, body, s, signal);
   let text = '';
+  let truncated = false;
   const usage: Usage = { totalMs: 0 };
   let firstTok = 0;
   for await (const line of lines(res.body!, signal)) {
@@ -294,7 +393,15 @@ async function openai(
       continue;
     }
     if (j.error) throw new LlmError(`model error: ${j.error.message ?? j.error}`, 500);
-    const c = j.choices?.[0]?.delta?.content;
+    if (j.choices?.[0]?.finish_reason === 'length') truncated = true;
+    const delta = j.choices?.[0]?.delta;
+    // Splash / vLLM stream thinking apart from the answer (`reasoning_content`; some servers say `reasoning`).
+    const r = delta?.reasoning_content ?? delta?.reasoning;
+    if (typeof r === 'string' && r) {
+      if (!firstTok) firstTok = performance.now();
+      onThink?.(r);
+    }
+    const c = delta?.content;
     if (c) {
       if (!firstTok) firstTok = performance.now();
       text += c;
@@ -317,6 +424,7 @@ async function openai(
   }
   usage.totalMs = performance.now() - t0;
   if (usage.promptMs === undefined && firstTok) usage.promptMs = firstTok - t0;
+  if (truncated) throw new LlmError(`the model ran out of output budget (${st.maxOut} tokens) before it finished answering`, 0, 'length');
   return { text: stripThinking(text), usage, mode: st.level };
 }
 
@@ -462,7 +570,7 @@ export async function prewarm(s: Settings, msgs: ChatMsg[], signal?: AbortSignal
   // Nothing to load on a hosted model, and the Responses API can't cap the reply at one token: it would cost plan usage.
   if (s.kind === 'chatgpt') return 0;
   try {
-    await chat({ ...s, maxOutput: 1, effort: s.effort === 'default' ? 'default' : 'none' }, msgs, null, signal ?? AbortSignal.timeout(120000));
+    await chat({ ...s, maxOutput: 1, effort: s.effort === 'default' ? 'default' : 'none' }, msgs, null, signal ?? AbortSignal.timeout(120000), undefined, { cutoffOk: true });
   } catch {
     // ignore
   }
