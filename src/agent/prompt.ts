@@ -22,11 +22,12 @@ const NOTES: Partial<Record<string, string>> = {
   read: 'page text; query filters lines',
   find: 'search the whole page, returns refs',
   screenshot: 'look at the page, refs drawn on it',
+  web_search: 'quick facts without leaving the page; open a result with navigate',
   login: 'on sign-in pages: fills the saved login (hidden from you); enter submits',
 };
 
-export function systemPrompt(opts: { vision: boolean; reasoning: boolean; login?: boolean }): string {
-  const tools = toolsFor(opts.vision, !!opts.login)
+export function systemPrompt(opts: { vision: boolean; reasoning: boolean; login?: boolean; search?: boolean }): string {
+  const tools = toolsFor(opts.vision, !!opts.login, !!opts.search)
     .map(t => (NOTES[t.name] ? `${t.sig}  ${NOTES[t.name]}` : t.sig))
     .join('\n');
   // Double quotes inside a string value end it early under grammar-constrained decoding and the reply degenerates
@@ -53,8 +54,8 @@ export interface Step {
   result: string;
 }
 
-export function taskMessage(task: string, date: string, attached?: string): string {
-  return `Task: ${task}\n(Today is ${date}.)${attached ? `\n\n${attached}` : ''}`;
+export function taskMessage(task: string, date: string, attached?: string, context?: string): string {
+  return `${context ? `${context}\n\n` : ''}Task: ${task}\n(Today is ${date}.)${attached ? `\n\n${attached}` : ''}`;
 }
 
 /** A tab the user attached, as read at the start of the run (see Host.readTab). */

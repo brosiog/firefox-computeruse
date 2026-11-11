@@ -42,6 +42,12 @@ export interface Settings {
   vaultAsk: boolean;
   /** Coding agents on the bridge (and tasks they delegate) may use Bitwarden logins too. Off by default. */
   vaultAgents: boolean;
+  /** Opt-in: the agent gets a web_search tool (Parallel's keyless Search MCP). The search words leave the browser. */
+  webSearch: boolean;
+  /** Saved conversations are deleted this long after their last message: 'forever' or a number of days. */
+  keepChats: string;
+  /** Things to remember: plain sentences, one per line; "site.com: …" lines apply only on that site (see memory.ts). */
+  notes: string;
   /** Benchmarks only: replaces the built-in system prompt. Not shown in the UI. */
   systemOverride?: string;
 }
@@ -97,6 +103,9 @@ export const DEFAULTS: Settings = {
   vaultUrl: 'http://localhost:8087',
   vaultAsk: true,
   vaultAgents: false,
+  webSearch: false,
+  keepChats: 'forever',
+  notes: '',
 };
 
 declare const browser: any;
