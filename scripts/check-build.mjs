@@ -18,6 +18,7 @@ const EXPECT = {
   geckoId: 'firefox-computeruse@local',
   permissions: ['scripting', 'storage', 'tabs', 'theme', 'webRequest', 'webRequestBlocking'],
   hostPermissions: ['<all_urls>'],
+  dataCollection: { required: ['authenticationInfo', 'browsingActivity', 'websiteContent'], optional: ['searchTerms'] },
   // Total bytes in dist/. ~146 kB: main is ~123 kB (prompt-injection defenses, Sign in with ChatGPT, @-attached tabs)
   // and Bitwarden logins add ~23 kB (sign-in field finder, redaction, vault client); the themed chat-style sidebar adds
   // ~7 kB (browser-theme mapping, styles, icons), ~153 kB in all; approval levels, the AMO release and web search bring it to ~165 kB,
@@ -72,6 +73,10 @@ if (same(m.permissions, EXPECT.permissions)) ok(`permissions: ${m.permissions.jo
 else fail(`permissions changed: got [${m.permissions}], expected [${EXPECT.permissions}]. If intended, update scripts/check-build.mjs.`);
 if (same(m.host_permissions, EXPECT.hostPermissions)) ok(`host_permissions: ${m.host_permissions.join(', ')}`);
 else fail(`host_permissions changed: got [${m.host_permissions}], expected [${EXPECT.hostPermissions}]`);
+const dc = m.browser_specific_settings?.gecko?.data_collection_permissions ?? {};
+if (same(dc.required ?? [], EXPECT.dataCollection.required) && same(dc.optional ?? [], EXPECT.dataCollection.optional))
+  ok(`data collection: required ${dc.required.join(', ')}; optional ${dc.optional.join(', ')}`);
+else fail(`data_collection_permissions changed: got ${JSON.stringify(dc)}, expected ${JSON.stringify(EXPECT.dataCollection)}. Update the privacy policy too.`);
 if (m.optional_permissions?.length) fail(`unexpected optional_permissions: ${m.optional_permissions}`);
 
 // Firefox's default MV3 CSP adds upgrade-insecure-requests, which breaks plain-HTTP LAN model servers (see wxt.config.ts).

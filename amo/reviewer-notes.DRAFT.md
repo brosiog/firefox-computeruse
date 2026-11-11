@@ -99,15 +99,19 @@ hard-coded in the build. The default model URL is `localhost`.
 
 No analytics, telemetry or developer-side server. Page content and task text go to the model server the user configures,
 and to OpenAI only if the user chooses ChatGPT. The manifest declares the AMO data-collection categories
-`websiteContent` and `authenticationInfo` (`browser_specific_settings.gecko.data_collection_permissions` in `wxt.config.ts`).
-Full details are in the privacy policy (draft:
-`amo/privacy-policy.DRAFT.md`). [Owner to confirm the policy's final location and the AMO data-collection categories.]
+`websiteContent`, `browsingActivity` and `authenticationInfo` as required, and `searchTerms` as optional
+(`browser_specific_settings.gecko.data_collection_permissions` in `wxt.config.ts`). The sidebar requests `searchTerms` with
+`permissions.request` when the user ticks *Let the agent search the web*, and turns web search off if the consent is
+withdrawn. Searches go to `https://search.parallel.ai/mcp` (search words only). Full details are in the privacy policy
+(`amo/privacy-policy.md`, also pasted into the listing).
 
 ## Optional local bridge
 
 `bridge/fcu.mjs` is a Node script (no dependencies beyond Node's built-ins, checked by `check-build`). The user starts it
-to let a coding agent use the browser. It listens only on `127.0.0.1:47823`. The extension connects to it only when
-the user sets the bridge URL.
+to let a coding agent use the browser. It listens only on `127.0.0.1:47823`. The bridge is off by default: the extension
+connects only when the user sets both the bridge URL and a pairing token (printed by `node bridge/fcu.mjs token`). The
+token is never sent; requests carry an HMAC of it with a timestamp and nonce, and the extension runs only commands the
+hub signed with it, so another local process can neither call the hub nor pose as it.
 
 ## Owner checklist before submission (remove this section before sending)
 

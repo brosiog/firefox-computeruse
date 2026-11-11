@@ -260,8 +260,20 @@ export function startBridge(
   const keyP = bridgeKey(token);
   const post = async (path: string, payload: unknown, signal?: AbortSignal) => {
     const body = JSON.stringify(payload);
-    const headers = { 'x-fcu': '1', 'content-type': 'application/json', authorization: await bridgeAuth(await keyP, path, body) };
-    return fetch(`${base}${path}`, { method: 'POST', headers, body, signal });
+    const authorization = await bridgeAuth(await keyP, path, body);
+    const headers = { 'x-fcu': '1', 'content-type': 'application/json', authorization };
+    const r = await fetch(`${base}${path}`, { method: 'POST', headers, body, signal });
+    return Object.assign(r, { nonce: authorization.split(' ')[1].split('.')[1] });
+  };
+  /** An empty poll reply counts only when the hub signed it over this request's nonce. */
+  const idleOk = async (r: Response & { nonce: string }) => {
+    const sig = fromHex(r.headers.get('x-fcu-sig') ?? '');
+    return !!sig && crypto.subtle.verify('HMAC', await keyP, sig, enc.encode(`fcu-idle\n${r.nonce}`));
+  };
+  const notOurs = async () => {
+    set(false);
+    issue('sig', `Agent bridge: ignored a reply from ${base} that was not signed with the pairing token (not your fcu hub, or a different token).`);
+    await new Promise(r => setTimeout(r, 2000));
   };
   (async () => {
     while (!stopped) {
@@ -269,14 +281,17 @@ export function startBridge(
         const r = await post('/poll', { session }, ctrl.signal);
         if (r.status === 403) issue('403', `Agent bridge: the hub at ${base} refused the pairing token. Run \`node bridge/fcu.mjs token\` and paste it in Settings.`);
         if (r.status !== 200 && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-        set(true);
-        if (r.status === 204) continue;
-        const job = await openBridgeCmd(await keyP, session, await r.json());
-        if (!job || ran.has(job.id)) {
-          issue('sig', `Agent bridge: ignored a command from ${base} that was not signed with the pairing token (not your fcu hub, or a different token).`);
-          await new Promise(r => setTimeout(r, 2000));
+        if (r.status === 204) {
+          if (await idleOk(r)) set(true);
+          else await notOurs();
           continue;
         }
+        const job = await openBridgeCmd(await keyP, session, await r.json());
+        if (!job || ran.has(job.id)) {
+          await notOurs();
+          continue;
+        }
+        set(true);
         ran.add(job.id);
         void handle(job.cmd).then(result => post('/result', { id: job.id, session, result }).catch(() => {}));
       } catch {

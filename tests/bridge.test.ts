@@ -179,6 +179,29 @@ describe('bridge pairing', () => {
       srv.close();
     }
   }, 10000);
+
+  it('an empty poll reply shows the hub as connected only when it is signed over the poll nonce', async () => {
+    for (const signed of [false, true]) {
+      const srv = http.createServer((req, res) => {
+        req.resume().on('end', () => {
+          const nonce = String(req.headers.authorization).split(' ')[1].split('.')[1];
+          setTimeout(() => res.writeHead(204, signed ? { 'x-fcu-sig': hmac(`fcu-idle\n${nonce}`) } : {}).end(), 50);
+        });
+      });
+      await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
+      let up = false;
+      const issues: string[] = [];
+      const stop = startBridge(`http://127.0.0.1:${(srv.address() as any).port}`, TOKEN, async () => ({ ok: true, text: '' }), v => (up = v), t => issues.push(t));
+      try {
+        await new Promise(r => setTimeout(r, 400));
+        expect(up).toBe(signed);
+        expect(issues.length).toBe(signed ? 0 : 1);
+      } finally {
+        stop();
+        srv.close();
+      }
+    }
+  }, 10000);
 });
 
 describe('bridge hub (bridge/fcu.mjs)', () => {

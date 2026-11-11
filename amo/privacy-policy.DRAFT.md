@@ -1,13 +1,12 @@
 <!--
 DRAFT. NOT APPROVED. NOT PUBLISHED.
-For the owner to review, edit and approve before any AMO submission. Bracketed items are decisions or facts the owner must
-fill in. This draft describes version 0.1.x, including saved conversations, notes, web search and the paired
-bridge.
+Filled in and checked against the 0.1.x code (saved conversations, notes, web search, the paired bridge). The owner
+approves it before any AMO submission; see the checklist at the end.
 -->
 
 # Privacy Policy: Firefox Browser Use
 
-_Last updated: [DATE, owner to set]_
+_Last updated: 10 November 2026_
 
 Firefox Browser Use ("the extension") is a Firefox extension that runs a web agent in the Firefox sidebar. The agent
 reads the page in the current tab and can act on it, using a language model that **you** configure.
@@ -18,8 +17,9 @@ you turn on web search, the agent's search words go to Parallel's search service
 
 ## 1. Who is responsible
 
-[Developer name, owner to fill in]
-Contact: [contact address or form, owner to fill in]
+Ambrosio Gomez, the developer of Firefox Browser Use.
+Contact: open an issue at https://github.com/brosiog/firefox-computeruse/issues, or for anything private (including
+security reports), use https://github.com/brosiog/firefox-computeruse/security/advisories/new.
 
 ## 2. What the extension handles on your computer
 
@@ -43,7 +43,7 @@ button. *Settings → Keep past conversations* deletes conversations not touched
 to keep them until you delete them. Notes are edited or removed in *Settings → Things to remember*.
 
 If you use the agent bridge, the hub program (`bridge/fcu.mjs`) also keeps the pairing token in a file readable only by
-your user account (mode 0600) in your user configuration directory on this computer.
+your user account (mode 0600) in your user configuration directory on this computer (`$XDG_CONFIG_HOME/fcu/token`, or `~/.config/fcu/token`).
 
 Removing a sign-in with **Sign out** revokes the ChatGPT refresh token where OpenAI's service supports it, then deletes
 the record. Uninstalling the extension removes everything in its storage (it does not remove the hub's token file).
@@ -94,11 +94,16 @@ words can include details from your task or the page, because the model writes t
 **Not done:** no advertising, no analytics, no crash reporting, no sale of data, no sharing with third parties other
 than the services you turn on above, and no data sent to the developer.
 
-**Data-collection categories declared to Mozilla (AMO):** `websiteContent` (page text and task text sent to the model
-server you configure, or to OpenAI with ChatGPT sign-in, screenshots if vision is on, and notes and earlier turns of
-the conversation) and `authenticationInfo`
-(the ChatGPT sign-in tokens, and the Bitwarden sign-in handling in section 3c). The extension does not declare any other
-category.
+**Data-collection categories declared to Mozilla (AMO):**
+
+- required: `websiteContent` (page text and task text sent to the model server you configure, or to OpenAI with ChatGPT
+  sign-in, screenshots if vision is on, and notes and earlier turns of the conversation), `browsingActivity` (the
+  addresses and titles of the current, attached and open tabs, sent to the same server so the agent knows where it
+  is), and `authenticationInfo` (the ChatGPT sign-in tokens, and the Bitwarden sign-in handling in section 3c);
+- optional: `searchTerms` (section 3e). Firefox asks for it when you turn on web search; if you decline, or later
+  withdraw it in the add-on's permissions, web search stays off.
+
+The extension does not declare any other category.
 
 ## 4. Permissions and why they are needed
 
@@ -129,19 +134,16 @@ The extension is not directed to children under 13 and does not knowingly collec
 
 ## 7. Changes
 
-If this policy changes, the new version is published in the repository and the "Last updated" date changes. [Owner to
-confirm where the policy is published, e.g. the AMO listing and the repository README.]
+This policy is published on the extension's AMO listing and in the repository (`amo/privacy-policy.md`). If it
+changes, both are updated and the "Last updated" date changes.
 
 ## Owner checklist before approval (remove this section before publishing)
 
-- [ ] Confirm the developer name and contact.
-- [ ] Set the "Last updated" date.
-- [ ] Confirm the AMO data-collection categories. `wxt.config.ts` now declares `data_collection_permissions: { required:
-      ['websiteContent', 'authenticationInfo'] }`, which section 3 describes. Decide whether tab addresses and titles (sent to
-      the model with the `tabs` permission) also need `browsingActivity`; this draft does not declare it.
-- [ ] Confirm that the statements about ChatGPT token storage (plain form in the profile) and revocation match the shipped build.
-- [ ] Confirm where the policy will be published, and that the AMO listing links to it.
-- [ ] Decide whether web search (section 3e) needs the `searchTerms` category; this draft does not declare it.
-- [ ] Confirm that section 3d (bridge off by default, pairing token, signed commands, 0600 token file) matches the
-      shipped bridge, and the token file's exact location.
-- [ ] Confirm the past-conversation and notes statements (sections 2 and 3a) match the shipped build.
+Checked against the code on 10 November 2026: ChatGPT token storage and revocation (`src/llm/chatgpt-auth.ts`), the
+bridge and its token file (`bridge/fcu.mjs`, `src/bridge.ts`), conversations and notes (`src/chats.ts`,
+`src/memory.ts`: at most 200 conversations, the last 8 turns), web search (`src/search.ts`), and the data-collection
+categories (`wxt.config.ts`, enforced by `scripts/check-build.mjs`).
+
+- [ ] Read and approve the policy, then rename this file to `amo/privacy-policy.md` without this section and the draft
+      banner.
+- [ ] Paste it into the AMO listing's privacy policy field.

@@ -40,14 +40,16 @@ What it does:
 - Optional: fill sign-ins from your own Bitwarden vault through the local Bitwarden CLI (`bw serve`). The agent never sees
   passwords, usernames or one-time codes, and you approve each sign-in by default.
 - Optional: an agent bridge on your own computer, for coding agents such as Claude Code or Codex to use your Firefox.
-  It is off unless you set its URL.
+  It is off by default and connects only after you pair it with a token the bridge prints.
+- Optional: web search for the agent through Parallel's keyless search service. Off by default; only the search words
+  are sent.
 
 Privacy: the extension has no server of its own. It has no analytics or telemetry and sends nothing to the developer.
-Page content goes only to the model server you choose, and to OpenAI if you choose ChatGPT sign-in. Full details:
-[PRIVACY POLICY URL, owner to publish, see amo/privacy-policy.DRAFT.md].
+Page content goes only to the model server you choose, and to OpenAI if you choose ChatGPT sign-in. Full details are in
+the privacy policy on this page.
 
-Requires Firefox 128 or later. The data-collection categories declared for this add-on are website content and
-authentication information.
+Requires Firefox 128 or later. The data-collection categories declared for this add-on are website content, browsing
+activity and authentication information, and search terms if you turn on web search.
 
 ## Suggested categories
 
@@ -56,10 +58,10 @@ authentication information.
 
 ## Links
 
-- Support email: [SUPPORT EMAIL, owner to fill in]
-- Support website: [SUPPORT URL, owner to fill in, or the repository's issue tracker]
-- Homepage: [HOMEPAGE URL, owner to choose; the repository https://github.com/brosiog/firefox-computeruse is a candidate]
-- Privacy policy: [PRIVACY POLICY URL, owner to publish]
+- Support email: none (leave empty; the support website covers it)
+- Support website: https://github.com/brosiog/firefox-computeruse/issues
+- Homepage: https://github.com/brosiog/firefox-computeruse
+- Privacy policy: paste `amo/privacy-policy.md` into the listing's privacy policy field
 - License: Apache-2.0
 
 ## Version notes for 0.1.0

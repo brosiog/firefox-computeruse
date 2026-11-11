@@ -72,6 +72,11 @@ function token() {
     chmodSync(dirname(TOKEN_FILE), 0o700);
     chmodSync(TOKEN_FILE, 0o600);
   } catch {}
+  // Another bridge process may have created the file a moment ago and not written it yet.
+  for (let i = 0; !tokenCache && i < 20; i++) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    tokenCache = read();
+  }
   if (!tokenCache) throw new Error(`${TOKEN_FILE} is empty: delete it to make a new pairing token`);
   return tokenCache;
 }
@@ -167,7 +172,7 @@ function hubCall(cmd, timeoutMs) {
 
 function send(res, code, body, headers = () => ({})) {
   if (res.writableEnded) return;
-  if (body === undefined) return res.writeHead(code).end();
+  if (body === undefined) return res.writeHead(code, headers('')).end();
   const s = JSON.stringify(body);
   res.writeHead(code, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(s), ...headers(s) }).end(s);
 }
@@ -208,13 +213,15 @@ async function handle(req, res) {
     case '/poll': {
       const sid = String(body.session ?? 'default');
       seen.set(sid, Date.now());
+      // An empty reply is signed over the poll's nonce too, so a hub without the token can't even look connected.
+      const idle = w => send(w.res, 204, undefined, () => (w.nonce ? { 'x-fcu-sig': mac(`fcu-idle\n${w.nonce}`) } : {}));
       const prev = waiters.get(sid);
-      if (prev) clearTimeout(prev.timer), send(prev.res, 204);
-      const w = { res, at: Date.now() };
+      if (prev) clearTimeout(prev.timer), idle(prev);
+      const w = { res, at: Date.now(), nonce: auth.nonce };
       w.timer = setTimeout(() => {
         if (waiters.get(sid) === w) waiters.delete(sid);
         seen.set(sid, Date.now());
-        send(res, 204);
+        idle(w);
       }, POLL_MS);
       res.on('close', () => {
         if (waiters.get(sid) === w) waiters.delete(sid), clearTimeout(w.timer);

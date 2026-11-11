@@ -900,6 +900,31 @@ $('gear').onclick = openSettings;
 statusBtn.onclick = openSettings;
 $('fullauto').onclick = openSettings;
 
+// Web search sends search words to Parallel: its data-collection category (searchTerms) is optional in the manifest
+// and asked for when the box is ticked (a user gesture). Firefox before 140 has no data-collection consent and throws
+// or ignores the key: the setting alone decides there.
+const SEARCH_CONSENT = { permissions: [], origins: [], data_collection: ['searchTerms'] };
+const webSearchBox = form.elements.namedItem('webSearch') as HTMLInputElement;
+webSearchBox.addEventListener('change', async () => {
+  if (!webSearchBox.checked) return;
+  try {
+    if (!(await browser.permissions.request(SEARCH_CONSENT))) webSearchBox.checked = false;
+  } catch {
+    // no data-collection consent in this Firefox
+  }
+});
+/** Turns web search off if the user withdrew its data-collection consent (about:addons → Permissions). */
+async function checkSearchConsent() {
+  if (!settings.webSearch) return;
+  try {
+    if (await browser.permissions.contains(SEARCH_CONSENT)) return;
+  } catch {
+    return;
+  }
+  settings = { ...settings, webSearch: false };
+  await saveSettings(settings);
+}
+
 dlg.addEventListener('close', async () => {
   vaultPw.value = '';
   if (dlg.returnValue !== 'save') return;
@@ -979,6 +1004,7 @@ void followTheme(browser);
 
 (async () => {
   settings = await loadSettings();
+  await checkSearchConsent();
   // Old conversations past the retention window are deleted each time the sidebar opens.
   chats = prune(await loadChats(), settings.keepChats);
   void saveChats(chats).catch(() => {});
